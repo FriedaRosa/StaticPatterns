@@ -1,0 +1,797 @@
+---
+title: "tidymodels jaccard"
+author: "f"
+format: html
+---
+
+# Full machine learning workflow
+
+## libraries
+
+```{r}
+#| message: false
+#| warning: false
+#| error: false
+#| output: false
+
+library(dplyr)
+library(ranger)
+library(DALEXtra)
+library(tidymodels)
+library(skimr)
+library(caret)
+
+tidymodels_prefer()
+rm(list=ls())
+set.seed(123)
+```
+
+## full data
+
+We have categorical variables where "NA" is coded as level. We will remove NA in the levels and replace it with actual "NA" indicator
+
+```{r}
+dd <- readRDS(here::here("Data/output/1_data/3_final_data.rds")) 
+
+
+library(rstatix)
+apply(dd,2, range, na.rm=T) %>% as.data.frame()
+
+dd %>% 
+  get_summary_stats(type = "robust") %>% 
+  mutate(across(where(is.numeric), round))
+
+```
+
+## Subset data to responses
+
+```{r}
+dta_J <- dd %>% select(-log_R2_1, -ratio_R2_1)
+dta_lnRR <- dd %>% select(-Jaccard_dissim, -ratio_R2_1)
+dta_Delta <- dd %>% select(-Jaccard_dissim, -log_R2_1)
+
+skim(dta_J)
+```
+
+## Univariate models to determine variables
+
+```{r}
+library(ranger)
+library(dplyr)
+
+# Function to fit univariate RF models
+run_univariate_rf <- function(var, data) {
+  rf_model <- ranger(
+    formula = as.formula(paste("Jaccard_dissim ~", var)),
+    data = data,
+    importance = "permutation"
+  )
+  return(data.frame(Variable = var, R2 = rf_model$r.squared))
+}
+
+# Run RF for each predictor
+rf_results <- bind_rows(lapply(names(dta_J)[-which(names(dta_J) == "Jaccard_dissim")], run_univariate_rf, data = dta_J))
+
+# Print results sorted by R²
+rf_results <- rf_results %>% arrange(desc(R2))
+print(rf_results)
+
+rf_results %>% 
+  write.csv("Documentation/univariate_rf_results_Jaccard.csv")
+
+
+opt_vars_uni <- rf_results %>% 
+  filter(R2 > 0) # 34 vars
+
+full_model <- ranger(
+  formula = Jaccard_dissim ~.,
+  data = dta_J %>% select(-verbatimIdentification),
+  importance = "permutation"
+)
+importance_scores_all <- data.frame(Variable = names(full_model$variable.importance),
+                                Importance = full_model$variable.importance) %>% 
+  arrange(desc(Importance))
+
+importance_scores_all %>% 
+  filter(Importance > 0.001)
+
+
+
+
+all_vars_rf <- ranger(
+    formula = Jaccard_dissim~.,
+    data = dta_J %>% select(Jaccard_dissim, all_of(opt_vars_uni$Variable)),
+    importance = "permutation"
+  )
+all_vars_rf$variable.importance
+
+
+importance_scores <- data.frame(Variable = names(all_vars_rf$variable.importance),
+                                Importance = all_vars_rf$variable.importance) %>% 
+  arrange(desc(Importance))
+
+# Sort and print top predictors
+print(importance_scores)
+
+
+
+```
+
+::: panel-tabset
+## recursive feature elimination
+
+```{r}
+ranger_funcs <- list(
+  summary = defaultSummary,
+  fit = function(x,y, first, last, ...){
+    loadNamespace("ranger")
+    data = data.frame(cbind(x,y))
+    ranger::ranger(y ~ .,
+                   data = data,
+                   num.trees = 5000,
+                   oob.error = T,
+                   importance="permutation",
+                   respect.unordered.factors = TRUE)
+  },
+  pred = function(object, x)  {
+    predict(object, data = x)$predictions
+  },
+  rank =
+    function(object, x, y) {
+      vimp <- data.frame(Overall = object$variable.importance)#ranger
+      # vimp <- caret::varImp(object, type = 1, scale = TRUE) #randomForest
+      # vimp <- varImp(object) # default setting
+      if (is.factor(y)) {
+        if (all(levels(y) %in% colnames(vimp))) {
+          avImp <- apply(vimp[, levels(y), drop = TRUE], 1, mean)
+          vimp$Overall <- avImp
+        }
+      }
+      vimp <- vimp[order(vimp$Overall, decreasing = TRUE), , drop = FALSE]
+      if (ncol(x) == 1) {
+        vimp$var <- colnames(x)
+      } else {
+        vimp$var <- rownames(vimp)
+      }
+      vimp
+    },
+
+  selectSize =
+    function(x, metric, maximize) {
+      best <- if (maximize)
+        which.max(x[, metric])
+      else which.min(x[, metric])
+      min(x[best, "Variables"])
+    },
+
+  selectVar = function(y, size) {
+    library(dplyr)
+    finalImp <- y %>%
+      # keep only the needed columns
+      select(Overall, var) %>%
+      # group by var
+      group_by(var) %>%
+      # summarize
+      summarise(Overall = mean(Overall, na.rm = TRUE)) %>%
+      # arrange descending
+      arrange(desc(Overall))
+
+    # Now pick out the top variables
+    as.character(finalImp$var[1:size])
+  }
+)
+
+```
+
+## Jaccard
+
+```{r}
+n_pred <- ncol(dta_J) - 2
+colSums(is.na(dta_J))
+```
+
+```{r}
+## Recipe
+mod_rec <- recipe(Jaccard_dissim ~ . , data = dta_J) %>% # Jaccard
+  update_role(verbatimIdentification,
+              new_role = "speciesID",
+              old_role = "predictor") %>%
+  step_impute_knn(all_predictors(), neighbors = 10)
+
+## rfe
+rfe_ctrl <- rfeControl(
+  functions = ranger_funcs,
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3,
+  returnResamp = "all", # we need all resamples
+  verbose = TRUE,
+  saveDetails = TRUE)
+
+sizes <- seq(from = 1, to = n_pred)
+
+tictoc::tic()
+set.seed(123)
+rf_filter_J <- rfe(
+  na.action = "na.omit",
+  mod_rec,
+  data = dta_J,
+  sizes = sizes,
+  rfeControl = rfe_ctrl,
+  metric = "RMSE",
+  maximize = FALSE
+)
+tictoc::toc() #3609.2 sec elapsed
+
+rf_filter_J$optVariables
+
+saveRDS(rf_filter_J, here::here("Data/output/2_models/rfe_J_20225.rds")) # 17 vars // 31 vars
+#rf_filter <- readRDS(here::here("Data/output/2_models/rfe_J_230225.rds")) # 37 vars
+
+
+```
+
+## Parallel approach
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(doParallel)
+library(tidymodels)
+library(tictoc)
+library(here)
+
+
+dta_J <- dta_J %>% select(-verbatimIdentification)
+
+
+# Detect available cores (Use all but one core)
+n_cores <- parallel::detectCores() - 4
+cl <- makeCluster(n_cores, type = "PSOCK")  # Use PSOCK on Windows
+
+# Manually prep the recipe outside of parallel execution
+mod_rec <- recipe(Jaccard_dissim ~ ., data = dta_J) %>%
+  step_impute_knn(all_predictors(), neighbors = 10) %>%
+  prep(training = dta_J, retain = TRUE)  # <-- Prep outside of parallel
+
+# Bake the preprocessed dataset
+dta_J_prepped <- bake(mod_rec, new_data = dta_J)  # Apply transformation
+
+# Define RFE control with parallel processing
+rfe_ctrl <- rfeControl(
+  functions = ranger_funcs,
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3,
+  returnResamp = "all",  # Retain all resamples
+  verbose = TRUE,
+  saveDetails = TRUE,
+  allowParallel = TRUE  # Enables parallel execution
+)
+
+# Define feature sizes
+sizes <- seq(from = 1, to = ncol(dta_J_prepped) - 1)  # Exclude response variable
+
+y <- dta_J_prepped$Jaccard_dissim  # Define response variable  
+x <- dta_J_prepped %>% select(-Jaccard_dissim)
+
+# Testing if error goes away if I recode column names without "_"
+names(x) <- gsub("_", ".", names(x))  # Replace _ with .
+
+
+registerDoParallel(cl)
+
+# Run the RFE with preprocessed data
+tictoc::tic()
+set.seed(123)
+rf_filter_J <- rfe(
+  x = x,  # Exclude response variable
+  y = y,
+  sizes = sizes,
+  rfeControl = rfe_ctrl,
+  metric = "RMSE",
+  maximize = FALSE
+)
+tictoc::toc()  # Measure execution time
+
+# Stop the parallel backend
+stopCluster(cl)
+registerDoSEQ()  # Reset to sequential processing
+
+# Save the RFE result
+saveRDS(rf_filter_J, here::here("Data/output/2_models/rfe_J_240225_parallel.rds"))
+
+fit <- rf_filter_J$fit
+```
+
+```{r}
+library(hstats)
+library(doParallel)
+
+
+x 
+rf_filter_J <- readRDS(here::here("Data/output/2_models/rfe_J_240225_parallel.rds"))
+removed_vars <- setdiff(names(x), rf_filter_J$optVariables)
+fit <- rf_filter_J$fit
+
+# Detect available cores (Use all but one core)
+n_cores <- parallel::detectCores() - 4
+cl <- makeCluster(n_cores, type = "PSOCK")  # Use PSOCK on Windows
+registerDoParallel(cl)
+
+s <- hstats(fit, X = x, threeway_m = 5)
+
+
+plot(s, which = 1:100)
+saveRDS(s, "Data/output/2_models/threeway_hstats_J_240225.rds")
+stopCluster(cl)
+```
+
+## Log ratio AOO
+
+```{r}
+n_pred <- ncol(dta_lnRR) - 2
+
+```
+
+```{r}
+## Recipe
+mod_rec <- recipe(log_R2_1 ~ . , data = dta_lnRR) %>% # Jaccard
+  update_role(verbatimIdentification,
+              new_role = "speciesID",
+              old_role = "predictor") %>%
+  step_impute_knn(all_predictors(), neighbors = 10) %>%
+  step_corr(all_numeric_predictors(), threshold = 0.9) # remove those that are super highly correlated (new step)
+
+## rfe
+rfe_ctrl <- rfeControl(
+  functions = ranger_funcs,
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3,
+  returnResamp = "all", # we need all resamples
+  verbose = TRUE,
+  saveDetails = TRUE)
+
+sizes <- seq(from = 1, to = n_pred)
+
+tictoc::tic()
+set.seed(123)
+rf_filter_lnRR <- rfe(
+  na.action = "na.omit",
+  mod_rec,
+  data = dta_lnRR,
+  sizes = sizes,
+  rfeControl = rfe_ctrl,
+  metric = "RMSE",
+  maximize = FALSE
+)
+tictoc::toc() #3609.2 sec elapsed
+
+rf_filter_lnRR$optVariables
+
+saveRDS(rf_filter_lnRR, here::here("Data/output/2_models/rfe_lnRR_230225.rds")) # 17 vars // 31 vars
+#rf_filter <- readRDS(here::here("Data/output/2_models/rfe_J_230225.rds")) # 37 vars
+
+
+```
+
+## Delta AOO
+
+```{r}
+n_pred <- ncol(dta_Delta) - 2
+
+```
+
+```{r}
+## Recipe
+mod_rec <- recipe(ratio_R2_1 ~ . , data = dta_Delta) %>% # Jaccard
+  update_role(verbatimIdentification,
+              new_role = "speciesID",
+              old_role = "predictor") %>%
+  step_impute_knn(all_predictors(), neighbors = 10) %>%
+  step_corr(all_numeric_predictors(), threshold = 0.9) # remove those that are super highly correlated (new step)
+
+## rfe
+rfe_ctrl <- rfeControl(
+  functions = ranger_funcs,
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3,
+  returnResamp = "all", # we need all resamples
+  verbose = TRUE,
+  saveDetails = TRUE)
+
+sizes <- seq(from = 1, to = n_pred)
+
+tictoc::tic()
+set.seed(123)
+rf_filter_delta <- rfe(
+  na.action = "na.omit",
+  mod_rec,
+  data = dta_Delta,
+  sizes = sizes,
+  rfeControl = rfe_ctrl,
+  metric = "RMSE",
+  maximize = FALSE
+)
+tictoc::toc() #3609.2 sec elapsed
+
+rf_filter_delta$optVariables
+
+saveRDS(rf_filter_delta, here::here("Data/output/2_models/rfe_delta_230225.rds")) 
+
+
+
+```
+:::
+
+### Fast RFE
+
+We ran the rfe before, so now we only use the variables that were selected to be used in the model.
+
+## get data
+
+```{r}
+dd <- readRDS(here::here("Data/output/1_data/2_predictors.rds"))
+final_vars <- read.csv(here::here("Documentation/jacc_final_vars_rfe.csv")) %>% pull(x)
+colSums(is.na(dd))
+
+dd <- dd %>% filter(samplingPeriodID == 1)
+
+glimpse(dd)
+
+model_dd <- dd %>%
+  select(
+    #log_R2_1,
+    Jaccard_dissim, # y
+    verbatimIdentification, # speciesID
+    all_of(final_vars)
+  )
+
+skim(model_dd)
+glimpse(model_dd)
+dim(model_dd) # 19 columns = 17 predictors
+str(model_dd) # checking if factors are coded correctly
+```
+
+## create splits
+
+```{r}
+set.seed(123)
+split_info <- initial_split(model_dd, strata = datasetID, prop = 0.8)
+train <- training(split_info)
+test <- testing(split_info)
+folds <- vfold_cv(train, v=10, repeats = 3)
+```
+
+## create recipe
+
+```{r}
+set.seed(123)
+mod_rec <- recipe(Jaccard_dissim ~., data = train) %>% # Jaccard
+  update_role(verbatimIdentification, 
+              new_role = "speciesID", 
+              old_role = "predictor") %>%
+  step_impute_knn(c("mean_lnLac", "morans_I"), neighbors = 5) %>%
+  step_corr(all_numeric_predictors(), threshold = 0.9)
+```
+
+## model specifications
+
+```{r}
+set.seed(123)
+mod_spec <- rand_forest(mtry = tune(),
+                        trees = tune(),
+                        min_n = tune()) %>%
+                        set_engine("ranger", 
+                                   importance = "permutation",
+                                   respect.unordered.factors = TRUE) %>%
+                        set_mode("regression")
+
+
+```
+
+## workflow
+
+```{r}
+set.seed(123)
+mod_wf <- workflow() %>%
+  add_recipe(mod_rec) %>%
+  add_model(mod_spec)
+```
+
+## tuning
+
+### method 1: bayesian optimization
+
+```{r}
+#| eval: false
+set.seed(123)
+rf_params <- parameters(
+    mtry(range = c(2L, 17L)),
+    min_n(range = c(5L, 15L)),
+    trees(range = c(1000L, 5000L))
+)
+
+tictoc::tic()
+tuned_bayes <- tune_bayes(mod_wf, 
+                         resamples = folds,
+                         param_info = rf_params,
+                         initial = 5,
+                         iter = 50,
+                         control = control_bayes(verbose = T,
+                                                no_improve = 10,
+                                                seed = 123))
+
+## for iter 50 and no_improve = 10: mtry = 8, min_n = 5, trees = 4751
+best <- tuned_bayes %>% # mtry = 14, min_n = 5, trees = 4953
+  select_best()
+print(best)
+tictoc::toc()
+saveRDS(tuned_bayes, here::here("Code/2_MachineLearning/tidymodels/tuned_bayes_J.rds"))
+
+autoplot(tuned_bayes, type = "performance")
+collect_metrics(tuned_bayes)
+```
+
+```{r}
+#| echo: false
+tuned_bayes <- readRDS(here::here("Data/output/2_models/tuned_bayes_J.rds"))
+best <- tuned_bayes %>% # mtry = 14, min_n = 5, trees = 4953
+  select_best(metric = "rmse")
+
+collect_metrics(tuned_bayes)
+show_best(tuned_bayes, metric = "rmse")
+
+
+#RMSE marginals across parameters
+autoplot(tuned_bayes,  metric = "rsq", 
+         type = c("marginals")) +
+  geom_line()+ 
+  ggthemes::theme_par()
+
+
+
+# performance across iterations
+autoplot(tuned_bayes,  metric = "rmse", 
+         type = c("performance")) +
+  geom_line()+ 
+  ggthemes::theme_par()
+
+# parameter space searched:
+autoplot(tuned_bayes,  metric = "rmse", 
+         type = c("parameters")) +
+  geom_line()+ 
+  ggthemes::theme_par()
+```
+
+#### conditional relationships
+
+```{r}
+library(vip)
+set.seed(123)
+suppressMessages(library(condvis2))
+test_fit <- ranger::ranger(Jaccard_dissim ~., 
+                           data = test %>% select(-verbatimIdentification),
+                           mtry = 6, num.trees = 5000, 
+                           min.node.size = 5, 
+                           respect.unordered.factors = T, 
+                           scale.permutation.importance = TRUE,
+                           oob.error = TRUE,
+                           seed = 123,
+                           na.action = "na.learn",
+                           importance = "permutation",
+                           always.split.variables = "datasetID",
+                           write.forest = TRUE)
+
+
+
+
+vip(test_fit, n = 40)
+```
+
+```{r}
+#| eval: false
+condvis(model_dd %>% 
+          na.omit(), 
+        test_fit, 
+        response = "Jaccard_dissim", 
+        conditionvars = c("rel_occ_Ncells", "D_AOO_a"), 
+        sectionvars = "mean_lnLac", 
+        density = T)
+```
+
+```{r}
+library('vivid')
+
+top10 <- test_fit$variable.importance %>% sort() %>% tail(n=10) %>% names()
+
+vi <-  vivi(data = train %>% select(-verbatimIdentification), 
+            fit = test_fit, 
+            response = 'Jaccard_dissim',
+            v = top10)
+viviHeatmap(mat = vi)
+pdpPairs(data = train %>% select(-verbatimIdentification), 
+         fit =  test_fit, 
+         response = "Jaccard_dissim", 
+         nmax = 500, 
+         gridSize = 20,         
+         nIce = 100)
+
+
+
+
+library(hstats)
+v <- setdiff(colnames(train), "Jaccard_dissim")
+
+interactions <- hstats(test_fit, X = train %>% select(-Jaccard_dissim, -verbatimIdentification), v = v)
+threeway <- hstat(test_fit, X = train %>% select(-Jaccard_dissim), threeway_m = 5)
+# All statistics on same scale (of predictions)
+plot(interactions, squared = FALSE, normalize = FALSE, facet_scale = "free_y")
+```
+
+## Finalize workflow & fit final model
+
+```{r}
+final_wf <- mod_wf %>%
+  finalize_workflow(best)
+
+final_fit <- final_wf %>%
+  last_fit(split_info) # this will perform the model evaluation on the testing data directly
+
+saveRDS(final_fit, "tidymodels/final_fit_J.rds")
+```
+
+```{r}
+#| echo: false
+
+final_fit <- readRDS("tidymodels/final_fit_J.rds")
+```
+
+### Inspect results from final model
+
+```{r}
+final_fit %>% 
+  collect_metrics()
+
+final_fit %>% 
+  collect_predictors()
+```
+
+### Extract items from the object
+
+```{r}
+library(rpart.plot)
+# Extract things
+final_fit %>%
+  extract_workflow()
+
+final_fit %>%
+  extract_fit_engine() %>% rpart.plot()
+
+final_fit %>%
+  extract_fit_parsnip() %>% tidy()
+
+final_fit %>%
+  extract_recipe() 
+```
+
+## Predicting
+
+```{r}
+predictions <- predict(final_fit %>% tune::extract_workflow(), new_data = test) %>%
+  bind_cols(test$Jaccard_dissim) %>% # change y with response var
+  setNames(c(".pred", "Jaccard_dissim")) %>%
+  mutate(resid = Jaccard_dissim-.pred) 
+predictions
+plot(hist(predictions$resid))
+```
+
+## Explaining (xAI)
+
+```{r}
+## interactions
+library(iml)
+
+# Extract fitted model
+fit <- extract_fit_parsnip(final_fit)$fit  # Extracts the trained ranger model
+
+
+# Prepare iml Predictor object
+X <- train %>% select(-verbatimIdentification, -Jaccard_dissim)  # Feature matrix
+predictor <- Predictor$new(fit, data = X, y = train$Jaccard_dissim)
+
+# Function to compute Friedman's H²
+compute_h2 <- function(var1, var2, predictor) {
+  # Compute Partial Dependence for individual variables
+  pd_var1 <- FeatureEffect$new(predictor, feature = var1, method = "pdp")
+  pd_var2 <- FeatureEffect$new(predictor, feature = var2, method = "pdp")
+  
+  # Compute Partial Dependence for joint interaction
+  pd_interact <- FeatureEffect$new(predictor, feature = c(var1, var2), method = "pdp")
+
+  # Extract PDP values
+  f_var1 <- pd_var1$results$.value
+  f_var2 <- pd_var2$results$.value
+  f_var1_var2 <- pd_interact$results$.value
+
+  # Compute Friedman's H² statistic
+  numerator <- mean((f_var1_var2 - f_var1 - f_var2)^2)
+  denominator <- mean(f_var1_var2^2)
+
+  H2 <- sqrt(numerator / denominator)
+  return(H2)
+}
+
+
+# Get all feature pairs
+feature_names <- colnames(X)
+feature_pairs <- combn(feature_names, 2, simplify = FALSE)
+
+# Compute H² for all pairs
+h2_results <- tibble(
+  feature_1 = sapply(feature_pairs, `[`, 1),
+  feature_2 = sapply(feature_pairs, `[`, 2),
+  H2 = sapply(feature_pairs, function(p) compute_h2(p[1], p[2], predictor))
+)
+
+# Print sorted results
+h2_results %>% arrange(desc(H2))
+saveRDS(h2_results, here::here("Data/3_ml/interactions_h2_res.rds"))
+
+```
+
+### **Interpretation**
+
+-   **H² close to 0** → Little to no interaction between features.
+
+-   **H² closer to 1** → Strong interaction effect.
+
+```{r}
+exp <- DALEXtra::explain_tidymodels(final_fit %>% extract_workflow(),
+               data = train %>% select(-Jaccard_dissim), # replace y
+               y = train$Jaccard_dissim) # replace y
+
+# Global insights
+# partial dependence:
+pd <- model_profile(exp)
+plot(pd)
+
+# model diagnostics:
+md <- model_diagnostics(exp)
+plot(md)
+# model performance:
+mp <- model_performance(exp)
+plot(mp)
+# variable importance:
+vi <- model_parts(exp)
+plot(vi)
+
+# Instance-level insights:
+dd_high <- dd %>% slice_max(Jaccard_dissim) # change number for different rows (only single rows allowed)
+dd_low <- dd %>% slice_min(Jaccard_dissim)
+# make subset of dd with strong trends and see how each variable contributes
+
+# variable importance
+vi_high <- predict_parts(exp,
+              new_observation = dd_high[1,])
+plot(vi_high)
+
+
+vi_low <- predict_parts(exp,
+              new_observation = dd_low[8,])
+plot(vi_low)
+
+# diagnostics
+md_i <- predict_diagnostics(exp,
+              new_observation = dd_high[1,])
+plot(md_i)
+
+dd_low <- dd %>% filter(Jaccard_dissim <=)
+# partial dependence
+pd_i <- predict_profile(exp,
+              new_observation = dd_low[8,])
+
+plot(pd_i)
+```

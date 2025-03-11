@@ -1,0 +1,16 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+/.quarto/
+/Data/input/shp_global
+/Data/input/shp_introduced
+*.tif
+/Data/input/shp
+/_book
+*.html
+*.pptx
+tempCodeRunnerFile.r
+.Renviron
+*.rds

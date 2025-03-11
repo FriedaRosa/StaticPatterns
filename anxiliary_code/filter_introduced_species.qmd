@@ -1,0 +1,408 @@
+---
+title: "Introduced_species"
+format: html
+---
+
+# Configurations
+
+## Libraries
+
+```{r}
+#| label: libs
+
+library(RPostgres) # had problems loading it the other way
+package_list <- c("here", "askpass", "tidyr", "dplyr", "sf", "tmap", "httpgd")
+x <- lapply(package_list, library, character.only = TRUE) # read packages
+library(ggplot2)
+rm(list = ls())
+```
+
+## paths and vars
+
+```{r}
+#| label: paths-and-vars
+
+vars <- list(
+  predictors =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/PhD_Projects/Project-folders/StaticPredictors/Data/",
+  out =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/TemporalChange_StaticSnapshot/output/",
+  data_sf =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/TemporalChange_StaticSnapshot/input/data_sf.rds",
+  data =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/TemporalChange_StaticSnapshot/input/data.rds",
+  grid =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/TemporalChange_StaticSnapshot/input/grid.rds",
+  atlas_names = setNames(
+    factor(c(5, 6, 13, 26)),
+    c("Czechia", "NewYork", "Japan", "Europe")
+  ),
+  time_periods = c(1, 2),
+  desired_levels = factor(c("1", "2", "4", "8", "16", "32", "64", "128"),
+    ordered = T,
+    levels = c("1", "2", "4", "8", "16", "32", "64", "128")
+  ),
+  crs = c(
+    "Czechia" = "epsg:5514",
+    "NewYork" = "epsg:32118",
+    "Japan" = "epsg:6684",
+    "Europe" = "epsg:3035"
+  )
+)
+```
+
+# Get data
+
+## Database connection
+
+```{r}
+#| label: make-db-connection
+#| eval: false
+
+# Connect to the database
+con <- dbConnect(Postgres(),
+  dbname = "MOBI_atlases_testing",
+  host = "localhost",
+  port = 5432,
+  user = "frieda",
+  password = "W@b&GH!4"
+)
+# password = askpass::askpass("Password: "))
+
+dbListTables(con)
+
+# "SELECT * FROM \"MOBI_vw_FINAL_presence_records\" WHERE \"datasetID\" IN (5, 6, 13, 26)"
+# filter for 5, 6, 13, 26
+sql_query_grid <- "SELECT * FROM \"MOBI_geometry\" WHERE \"datasetID\" IN (5,6,13,26)"
+sql_query_data <- "SELECT * FROM \"MOBI_vw_FINAL_presence_records\"
+WHERE \"datasetID\" IN (5, 6, 13, 26)
+AND (\"datasetID\" <> 26 OR \"recordFilter\" IN (1, 2))"
+```
+
+## Grids
+
+```{r}
+#| eval: false
+#| label: get-grids-db
+
+# raw grids
+grids <- st_read(con, query = sql_query_grid)
+
+nrow(grids) # rows: 17,681
+glimpse(grids)
+
+# save to rds
+saveRDS(grids, vars$grid) # save raw grids
+
+# count cells per atlas
+grids %>%
+  st_drop_geometry() %>%
+  filter(scalingID == 1) %>%
+  group_by(datasetID) %>%
+  summarize(n_cells = n_distinct(siteID))
+```
+
+## Species data (+sf)
+
+```{r}
+#| eval: false
+
+# japan investigations:
+
+jp <- st_read(con, query = "SELECT * FROM public.\"MOBI_vw_FINAL_presence_records\"
+WHERE \"datasetID\" = 13 AND \"scalingID\" = 1")
+
+
+
+ggplot(jp) +
+  geom_sf(aes(fill = factor(recordFilter))) +
+  facet_wrap(~ factor(startYear))
+
+# questionnaires only for 2016 data. I am not using 2016 data.
+# decision: don't filter recordFilter for 13
+
+
+# eu investigation:
+eu <- st_read(con, query = "SELECT * FROM public.\"MOBI_vw_FINAL_presence_records\"
+WHERE \"datasetID\" = 26 AND \"scalingID\" = 1")
+
+
+ggplot(eu) +
+  geom_sf(aes(fill = factor(recordFilter))) +
+  facet_wrap(~ factor(startYear))
+
+# decision: filter cells with recordFilter %in% c(1,2)
+```
+
+```{r}
+#| label: get-species-db
+#| eval: false
+
+data_sf <- st_read(con, query = sql_query_data)
+
+data <- data_sf %>%
+  st_drop_geometry()
+
+glimpse(data)
+
+# save to rds
+saveRDS(data, vars$data) # save raw data
+
+saveRDS(data_sf, vars$data_sf)
+
+# close database connection again
+dbDisconnect(con)
+```
+
+### read back in to save time
+
+```{r}
+#| eval: true
+#| label: read-from-rds-to-save-time
+
+grids <- readRDS(here::here("input/grid.rds"))
+data <- readRDS(here::here("input/data.rds"))
+```
+
+# Preprocessing - Filtering
+
+## recordFilter
+
+## samplingPeriodID
+
+```{r}
+#| label: filter-by-samplingPeriodID
+
+# Define time periods in lookup table
+time_periods <- data %>%
+  dplyr::select(datasetID, startYear) %>%
+  distinct() %>%
+  group_by(datasetID) %>%
+  dplyr::arrange(startYear, .by_group = TRUE) %>%
+  dplyr::mutate(samplingPeriodID = row_number()) %>%
+  ungroup()
+
+# Join data with time periods and grids
+data_sf <- grids %>% # spatial grids as template for data
+  left_join(data_filtered %>% left_join(time_periods)) %>% # adds the samplingPeriodID
+  group_by(datasetID, scalingID, siteID) %>%
+  mutate(cell_sampled = if_else(is.na(verbatimIdentification), 0, 1)) %>%
+  # exclude sampling periods not matching those in focus:
+  filter(is.na(samplingPeriodID) | samplingPeriodID %in% vars$time_periods) %>%
+  ungroup()
+
+glimpse(data_sf) # this is the filtered data (!= data_sf (raw))
+```
+
+## cell_sampling_repeats
+
+```{r}
+#| label: filter-by-cells-repeated-twice
+
+# Create indicator for repeated sampling
+sampled_twice <- data_sf %>%
+  st_drop_geometry() %>%
+  distinct(datasetID, scalingID, siteID, samplingPeriodID, cell_sampled) %>%
+  group_by(datasetID, scalingID, siteID) %>%
+  dplyr::summarise(
+    cell_sampling_repeats =
+      if_else(any(cell_sampled != 0),
+        n_distinct(samplingPeriodID),
+        0
+      ),
+    .groups = "keep"
+  )
+
+# Merge indicators and clean data
+data_sf_filtered <- data_sf %>%
+  left_join(sampled_twice) %>%
+  select(
+    datasetID, scalingID, siteID, cell_sampling_repeats, samplingPeriodID,
+    verbatimIdentification, scientificName,
+    centroidDecimalLatitude, centroidDecimalLongitude,
+    area, croppedArea
+  ) %>%
+  unique()
+```
+
+## Species in excluded cells
+
+```{r}
+#| label: exclude-species-in-removed-cells
+
+dta <- data_sf_filtered %>%
+  st_drop_geometry()
+
+# Filter species data
+all_sp_raw <- dta %>%
+  filter(scalingID == 1) %>%
+  distinct(datasetID, samplingPeriodID, verbatimIdentification)
+
+lost_gained_sp <- lapply(vars$atlas_names, function(atlas) {
+  df <- all_sp_raw %>% filter(datasetID == atlas)
+  sp1 <- df %>%
+    filter(samplingPeriodID == 1) %>%
+    pull(verbatimIdentification)
+  sp2 <- df %>%
+    filter(samplingPeriodID == 2) %>%
+    pull(verbatimIdentification)
+  list(lost = setdiff(sp1, sp2), gained = setdiff(sp2, sp1))
+})
+names(lost_gained_sp) <- names(vars$atlas_names)
+
+# Filter species sampled twice (in cells sampled twice)
+common_sp <- dta %>%
+  filter(cell_sampling_repeats == 2, scalingID == 1) %>%
+  group_by(datasetID, verbatimIdentification) %>%
+  dplyr::summarise(sp_sampling_repeats = n_distinct(samplingPeriodID), .groups = "drop")
+
+excluded_sp <- dta %>%
+  filter(cell_sampling_repeats == 2, scalingID == 1) %>%
+  group_by(datasetID, verbatimIdentification) %>%
+  mutate(sp_sampling_repeats = n_distinct(samplingPeriodID)) %>%
+  filter(sp_sampling_repeats == 1) %>%
+  ungroup() %>%
+  select(datasetID, verbatimIdentification, samplingPeriodID, sp_sampling_repeats) %>%
+  unique()
+
+excluded_sp %>%
+  group_by(datasetID, samplingPeriodID) %>%
+  summarise(n_sp = n_distinct(verbatimIdentification)) %>%
+  mutate(
+    lost = case_when(samplingPeriodID == 1 ~ n_sp),
+    gained = case_when(samplingPeriodID == 2 ~ n_sp)
+  ) %>%
+  group_by(datasetID) %>%
+  summarise(
+    lost = sum(lost, na.rm = TRUE),
+    gained = sum(gained, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+presence_data_filt <- dta %>%
+  full_join(common_sp) %>%
+  filter(cell_sampling_repeats == 2, sp_sampling_repeats == 2) %>%
+  mutate(cell_sampling_repeats = as.factor(cell_sampling_repeats))
+
+data_sf_v3 <- data_sf_filtered %>%
+  left_join(common_sp)
+```
+
+### Checks
+
+```{r}
+#| label: check-filtered-results
+# check results for raw data:
+glimpse(data) # raw
+dim(data) # raw rows: 3,185,642
+
+# check results for filtered data:
+glimpse(data_filtered) # filtered
+dim(data_filtered) # filtered rows: 2,968,640
+
+nrow(data) - nrow(data_filtered) # filtered: reduction by -217,002 rows
+
+# check sampling periods in data:
+data_filtered %>%
+  distinct(datasetID, samplingPeriodID) # NAs are cells not sampled
+```
+
+## Save to file
+
+```{r}
+# Save results to Data folder
+saveRDS(data_sf_v3, here::here("Data", "1_data_sf.rds"))
+saveRDS(presence_data_filt, here::here("Data", "1_data_filtered.rds"))
+save.image(here::here("Data/RData/1_cleanAtlas.RData"))
+
+# save METADATA for atlases to documentation file:
+meta <- tbl(con, "MOBI_dataset") %>% filter(datasetID %in% c(5, 6, 13, 26))
+write.csv(meta, "Documentation/METADATA_datasets.csv")
+write.csv(excluded_sp, "Documentation/excluded_species.csv")
+```
+
+## BirdLife 2024
+
+```{r}
+name_vector_sql <- unique(data$scientificName)
+con2 <- dbConnect(Postgres(),
+  dbname = "Birds_of_the_World",
+  host = "localhost",
+  port = 5432,
+  user = "frieda",
+  password = "W@b&GH!4"
+)
+# password = askpass::askpass("Password: "))
+
+dbListTables(con2)
+
+# Ensure name_vector_sql is correctly formatted as an SQL-compatible string
+name_vector_sql <- paste0("'", paste(name_vector_sql, collapse = "', '"), "'")
+
+# Construct the query
+bl_query <- paste0(
+  "SELECT \"sci_name\", \"presence\", \"origin\", \"seasonal\",\"geometry\" ",
+  "FROM \"MOBI_botw_multipolygon_2024\" ",
+  "WHERE \"sci_name\" IN (", name_vector_sql, ") ",
+  "AND \"origin\" = 3 ", # Native or reintroduced (not introduced or vagrant)
+  "AND \"presence\" IN (1, 2, 3)" # Extant, probably extant, possibly extant (not possibly extinct or extinct)
+)
+
+
+tic()
+BirdLife <- st_read(con2, query = bl_query) # 56 seconds !!!!
+toc()
+
+# save to rds
+saveRDS(BirdLife, here::here("Data", "BirdLife_introduced.rds"))
+
+
+# Read and preprocess the data
+countries <- readRDS(here("input/grid.rds")) %>%
+  filter((datasetID != 5 | scalingID == 64) & (!(datasetID %in% c(6, 13, 26)) | scalingID == 128)) %>%
+  select(datasetID, geometry) %>%
+  unique() %>%
+  st_make_valid()
+
+# Handle datasetID == 6 separately
+countries_6 <- countries %>%
+  filter(datasetID == 6) %>%
+  summarize(
+    geometry = st_union(geometry),
+    .groups = "keep"
+  ) # Combine all geometries for datasetID == 6
+countries_6$datasetID <- 6
+
+# Handle all other datasetIDs
+countries_others <- countries %>%
+  filter(datasetID != 6)
+
+# Combine back into a single object
+countries_final <- bind_rows(countries_6, countries_others) %>% st_make_valid()
+
+countries_final %>%
+  filter(datasetID == 6) %>%
+  ggplot() +
+  geom_sf(aes(fill = datasetID), col = "black")
+
+
+invasive_sp <- st_join(countries_final, BirdLife,
+  join = st_intersects
+)
+
+invasive_sp %>%
+  filter(!is.na(sci_name)) %>%
+  ggplot() +
+  aes(fill = sci_name) +
+  geom_sf(alpha = 0.3, show.legend = FALSE) +
+  scale_fill_hue(direction = 1) +
+  ggthemes::theme_par() +
+  facet_wrap(vars(datasetID))
+
+invasive_sp %>%
+  st_drop_geometry() %>%
+  group_by(datasetID) %>%
+  summarize(n_sp = n_distinct(sci_name), .groups = "keep")
+```

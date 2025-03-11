@@ -1,0 +1,170 @@
+---
+title: "Comparison Europe/CZ trends"
+author: "FW"
+format:
+  html:
+    toc: true
+    code-fold: false
+    embed-resources: true
+editor: visual
+---
+
+```{r}
+#| label: load data
+#| output: false
+#| warnings: false
+#| errors: false
+#| messages: false
+
+library(here)
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(patchwork)
+
+
+```
+
+```{r}
+#| output: false
+#| warnings: false
+#| errors: false
+#| messages: false
+
+grids <- readRDS(here("Data/input/grid.rds")) %>% 
+  filter(datasetID %in% c(26, 5) & scalingID == 1)
+big_table <- readRDS(here("Data/output/1_data/2_big_table.rds"))
+Tax <-read.csv("../Documentation/Tax_lookup.csv") %>% .[,2:3]
+
+
+```
+
+```{r}
+#| output: false
+#| warnings: false
+#| errors: false
+#| messages: false
+
+sp_cz <- big_table %>% 
+  left_join(Tax) %>% 
+  filter(datasetID == 5) %>% distinct(scientificName, verbatimIdentification) 
+
+data_eu_cz <- big_table %>%
+  left_join(Tax) %>%
+  filter(datasetID %in% c(5,26) & scientificName %in% sp_cz$scientificName) %>% 
+  distinct() %>%
+  select(datasetID, scientificName, log_R2_1, ratio_R2_1)
+
+data_wide2 <- data_eu_cz %>%
+  tidyr::pivot_wider(
+    names_from = c(datasetID),
+    values_from = c(log_R2_1, ratio_R2_1),
+    values_fn = ~ mean(.x, na.rm=T)
+  ) %>%
+  mutate(
+    diff_lnRR = log_R2_1_5 - log_R2_1_26,
+    diff_RR = ratio_R2_1_5 - ratio_R2_1_26,
+    opposite_trend_lnRR = case_when(
+      log_R2_1_5 <= 0 & log_R2_1_26 <= 0 |  log_R2_1_5 >= 0 & log_R2_1_26 >= 0 ~ 0,
+      log_R2_1_5 <= 0 & log_R2_1_26 >= 0 |  log_R2_1_5 >= 0 & log_R2_1_26 <= 0~ 1,
+      .default = NA))
+
+```
+
+```{r}
+data_wide2 %>%
+  ggplot(aes(x = as.factor(opposite_trend_lnRR)))+
+  geom_bar()
+
+```
+
+```{r}
+#| warnings: false
+#| errors: false
+#| messages: false
+
+opposite_trends <- data_wide2 %>% 
+  filter(opposite_trend_lnRR == 1)
+
+
+sf_data <- readRDS(here("Data/output/1_data/1_data_sf.rds")) %>%
+  filter(datasetID %in% c(5,26) & 
+           (scientificName %in% opposite_trends$scientificName | 
+           is.na(scientificName))) %>%
+  filter(scalingID == 1)
+
+```
+
+```{r}
+
+skimr::skim(opposite_trends)
+
+```
+
+```{r}
+kableExtra::kable(opposite_trends)
+```
+
+# some maps
+
+```{r}
+sp_names <- unique(opposite_trends$scientificName) %>% na.omit()
+  
+
+```
+
+```{r}
+#| output: false
+#| warnings: false
+#| errors: false
+#| messages: false
+
+
+p1a <- sf_data %>% 
+  filter(scientificName == "Larus cachinnans" | is.na(scientificName)) %>%
+  filter(datasetID== 5 & (samplingPeriodID == 1| is.na(samplingPeriodID))) %>% 
+  right_join(grids %>% filter(datasetID == 5)) %>% st_as_sf() %>%
+  ggplot(aes(fill = scientificName)) +
+  geom_sf() +
+  scale_fill_discrete(na.value = "lightgrey")+
+  ggtitle("CZ Atlas 1")+
+  theme_void()
+
+p1b <- sf_data %>% 
+  filter(scientificName == "Larus cachinnans" | is.na(scientificName)) %>%
+  filter(datasetID== 5 & (samplingPeriodID == 2| is.na(samplingPeriodID))) %>% 
+  right_join(grids %>% filter(datasetID == 5)) %>% st_as_sf() %>%
+  ggplot(aes(fill = scientificName)) +
+  geom_sf() +
+  scale_fill_discrete(na.value = "lightgrey")+
+  ggtitle("CZ Atlas 2")+
+  theme_void()
+
+p2a <- sf_data %>% 
+  filter(scientificName == "Larus cachinnans" | is.na(scientificName)) %>%
+  filter(datasetID== 26 & (samplingPeriodID == 1| is.na(samplingPeriodID))) %>% 
+  right_join(grids %>% filter(datasetID == 26)) %>% st_as_sf() %>%
+  ggplot(aes(fill = scientificName)) +
+  geom_sf() +
+  scale_fill_discrete(na.value = "lightgrey")+
+  ggtitle("EU Atlas 1")+
+  theme_void()
+
+p2b <- sf_data %>% 
+  filter(scientificName == "Larus cachinnans" | is.na(scientificName)) %>%
+  filter(datasetID== 26 & (samplingPeriodID == 2| is.na(samplingPeriodID))) %>% 
+  right_join(grids %>% filter(datasetID == 26)) %>% st_as_sf() %>%
+  ggplot(aes(fill = scientificName)) +
+  geom_sf() +
+  scale_fill_discrete(na.value = "lightgrey")+
+  ggtitle("EU Atlas 2")+
+  theme_void()
+
+```
+
+```{r}
+p1a
+p1b
+p2a
+p2b
+```

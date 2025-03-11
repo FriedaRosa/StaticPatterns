@@ -1,0 +1,359 @@
+---
+title: "inspect data"
+author: "FW"
+---
+
+# Data inspection
+
+```{r}
+library(corrr)
+library(ggcorrplot)
+library(plotly)
+library(ggfortify)
+library(heatmaply)
+library(skimr)
+library(tidyverse)
+```
+
+## Dimensionality reduction
+
+We have quite a bunch of predictors prepared that could potentially
+correlate with temporal change trends.
+
+**H1: species traits**\
+**H2: range geometry** depicting various facets of the results of
+complex processes where many factors contribute to the final result
+(e.g., elongation of the range, fragmentation). These factors are not
+necessarily the mechanisms behind the change, but rather imprints of
+mechanism that act in concert. for example, fractal-like ranges are the
+result of processes such as colonization, extirpation, and population
+dynamics that vary in for each species, across space, time and different
+habitats - which are themselves distributed in a fractal way within
+landscapes. Therefore instead of trying to fit a model that includes
+processes and mechanisms that might be ill-informed in complex systems
+and not comprehensively capture all processes - we fit a model that
+tries to get information out of the spatial configuation and composition
+of species ranges in spatial way (as opposed to ecological way).\
+**H3: diversity metrics\
+H4: atlas characteristics**
+
+------------------------------------------------------------------------
+
+The problems with too many dimensions:
+
+-   too many predictors can be hard to understand or visualize
+
+-   multicollinearity: between-predictor correlations can negatively
+    impact the mathematical operations used to estimate a model.
+    Predictors may be measuring the same latent effect(s) and are thus
+    correlated
+
+```{r}
+dd <- readRDS(here::here("Data/output/1_data/2_predictors.rds")) %>%
+  filter(samplingPeriodID == 1)%>%
+  rename(HWI = 'Hand-Wing.Index') 
+
+
+
+responses <- c(
+  "Jaccard_dissim", "log_R2_1", "ratio_R2_1"
+  )
+
+drop_vars <- c(
+  "samplingPeriodID", "scientificName",
+  "occ_Ncells",  "rel_AOO",  # duplicated columns
+  "Family1", "Order1",
+  "morans_I_p", "presence_n",
+  "joincount_statistic", "joincount_expectation", "joincount_variance", "joincount_p_val", "joincount_zscore",
+  "atlas_xmin", "atlas_xmax", "atlas_ymin", "atlas_ymax",
+  #"GlobRangeSize_km2", # duplicated column
+  "atlas_relCirc", # missing for EBBA
+  "atlas_bearingMinRect", # duplicated column
+  "Total_Ncells", # not necessary
+  "Total_area_samp", # duplicated with Ncells
+  "atlas_circ", "circ", # duplicated with normalized circularity
+   "rel_lin" # less variation than elongation
+  )
+
+sp_id <- "verbatimIdentification"
+
+potential_preds <- setdiff(names(dd), c(sp_id, responses, drop_vars))
+potential_preds
+
+
+# Species traits
+H1_all <- c(
+  "Beak.Width", "HWI", "Mass", "GlobRangeSize_km2","pd", "PC1_sd", "PC2_sd", "mean_prob_cooccur", # numeric
+  "Habitat.Density", "Migration",  "Habitat", "Trophic.Level", "Trophic.Niche", "Primary.Lifestyle", "IUCN" #factors
+  )
+
+# Mean Diversity
+H3_all <- c(
+  "BetaSR_sp", 
+  "AlphaSR_sp", 
+  "GammaSR"
+  )
+
+# Atlas geometry
+H4_all <- c(
+  "datasetID", "Total_Ncells_samp",
+  "atlas_widthMinRect", "atlas_lengthMinRect", "atlas_yhalf", "atlas_xhalf",
+  "atlas_elonMinRect", "atlas_circNorm", "atlas_bearing"
+)
+
+# Range geometry
+H2_all <- c(
+  "AOO",  "rel_occ_Ncells","D_AOO_a", "mean_lnLac", 
+  "morans_I", "joincount_delta", 
+   "circNorm", 
+  "Dist_centroid_to_COG", "minDist_toBorder_centr", "maxDist_toBorder_centr", "minDist_toBorder_border", 
+  "range_centr_long", "range_centr_lat", 
+  "southerness", "westernnes", 
+  "rel_maxDist", "rel_ewDist", "rel_nsDist", 
+  "rel_elonRatio",
+  "rel_circNorm"
+  )
+
+setdiff(names(dd), c(responses, sp_id, drop_vars,H1_all, H2_all, H3_all, H4_all)) # all assigned
+```
+
+```{r}
+# Identify categorical variables
+cat_vars <- names(dd)[sapply(dd, is.factor)]
+print(cat_vars)
+
+# Count the frequency of each level in categorical variables
+rare_levels <- lapply(dd[cat_vars], function(x) table(x))
+
+# Print levels with less than 5 occurrences (adjust threshold as needed)
+for (var in cat_vars) {
+  print(paste("Variable:", var))
+  print(rare_levels[[var]][rare_levels[[var]] < 5])  # Show rare levels
+}
+
+
+
+# Identify categorical variables
+cat_vars <- names(dd)[sapply(dd, is.factor)]
+
+# Check which factors have "NA" as a level
+for (var in cat_vars) {
+  if ("NA" %in% levels(dd[[var]])) {
+    print(paste("Variable with 'NA' as a level:", var))
+  }
+}
+
+
+# Remove "NA" as a factor level from all categorical variables
+dd_cleaned <- dd  # Create a copy of your dataset
+
+for (var in cat_vars) {
+  dd_cleaned[[var]] <- droplevels(dd_cleaned[[var]])  # Drops unused levels
+}
+
+## check again
+# Identify categorical variables
+cat_vars <- names(dd_cleaned)[sapply(dd_cleaned, is.factor)]
+
+# Check which factors have "NA" as a level
+for (var in cat_vars) {
+  if ("NA" %in% levels(dd_cleaned[[var]])) {
+    print(paste("Variable with 'NA' as a level:", var))
+  }
+}
+rare_levels <- lapply(dd_cleaned[cat_vars], function(x) table(x))
+
+dd <- dd_cleaned
+
+
+
+final_data <- dd %>% 
+  select(all_of(c(responses, sp_id, H1_all, H2_all, H3_all, H4_all))) 
+
+skim(final_data)
+
+saveRDS(final_data, "Data/output/1_data/3_final_data.rds")
+```
+
+```{r}
+library(ggplot2)
+
+final_data %>% 
+  ggplot(aes(x=D_AOO_a, y=mean_prob_cooccur, col = datasetID))+
+  geom_point()+
+  ggthemes::theme_base()+
+  geom_smooth(method = "lm")+
+  scale_y_log10()+
+  ylab("log10(mean prob cooccur)")
+
+```
+
+
+### correlation plot of potential predictors
+
+```{r}
+library(corrr)
+dd <- final_data
+cor_data <- dd %>% select(all_of(potential_preds))  %>% filter(Habitat != "Desert") %>%
+  mutate(IUCN = case_when(is.na(IUCN) ~ "DD", .default = IUCN)) %>%
+  mutate(datasetID = as.integer(as.character(datasetID)))
+
+# Compute correlation matrix
+cor_matrix <- dd  %>% select(where(is.numeric)) %>%
+  correlate(method = "spearman", use = "pairwise.complete.obs")
+
+cp <- autoplot(cor_matrix, triangular = "full")+
+  theme(axis.text = element_text(size = 5))
+cp
+ggsave(here::here("figures/1_data/corrplot_numeric.pdf"), cp, dpi = 320)
+```
+
+### interactive for better assessment:
+
+```{r}
+library(plotly)
+library(recipes)
+# Define a recipe for preprocessing
+rec <- recipe(~ ., data = cor_data) %>%
+  step_impute_knn(neighbors = 10) %>%
+  step_dummy(all_nominal(), one_hot = TRUE) %>%  # Convert factors to dummy variables
+  step_nzv() %>%
+  prep() %>%
+  juice()
+
+cor_matrix2 <- rec %>% correlate(method = "spearman", use = "pairwise.complete.obs") 
+
+plot_ly(z = cor_matrix2 %>% as.matrix(), 
+        type="heatmap", 
+        x = names(cor_matrix2)[-1],
+        y = cor_matrix2$term)
+```
+
+```{r}
+library(heatmaply) 
+
+heatmaply_cor(
+  cor(cor_data %>% select(where(is.numeric)), method = "spearman", use = "pairwise.complete.obs"),
+  xlab = "Features", 
+  ylab = "Features",
+  k_col = 2, 
+  k_row = 2
+)
+```
+
+#### cor with p vals
+
+```{r}
+# Compute correlation coefficients
+cor.coef <-  cor(cor_data %>% select(where(is.numeric)), method = "spearman", use = "pairwise.complete.obs")
+
+# Compute correlation p-values with exact = FALSE
+cor.test.p <- function(data) {
+  cols <- colnames(data)
+  p.mat <- matrix(NA, ncol = length(cols), nrow = length(cols), dimnames = list(cols, cols))
+
+  for (i in 1:length(cols)) {
+    for (j in i:length(cols)) {  # Compute only upper triangle
+      if (i == j) {
+        p.mat[i, j] <- 0  # Diagonal should be zero
+      } else {
+        test <- cor.test(data[[cols[i]]], data[[cols[j]]], method = "spearman", exact = FALSE)
+        p.mat[i, j] <- test$p.value
+        p.mat[j, i] <- test$p.value  # Fill symmetric value
+      }
+    }
+  }
+  return(p.mat)
+}
+
+# Run p-value calculations
+p <- cor.test.p(cor_data %>% select(where(is.numeric)))
+cor.filtered <- ifelse(p > 0.05, NA, cor.coef)
+
+heatmaply_cor(
+  colors = viridis(n = 256, alpha = 1, begin = 0, end = 1, option = "viridis"),
+  cor.filtered,
+  node_type = "scatter",
+  point_size_mat = log10(1-p), 
+  point_size_name = "p-value",
+  label_names = c("x", "y", "Correlation")
+)
+
+
+
+
+# Compute a correlation matrix
+corr <- round(cor(cor_data %>% select(where(is.numeric)), method = "spearman", use = "pairwise.complete.obs"), 1)
+
+# Compute a matrix of correlation p-valueshttp://127.0.0.1:8723/graphics/plot_zoom_png?width=1745&height=917
+p.mat <- ggcorrplot::cor_pmat(cor_data %>% select(where(is.numeric)))
+
+# Visualize the lower triangle of the correlation matrix
+# Barring the no significant coefficient
+corr.plot <- ggcorrplot::ggcorrplot(
+  corr, hc.order = TRUE, type = "lower", 
+  outline.col = "white",
+  insig = c("blank"),
+  p.mat = p.mat
+  )
+
+ggplotly(corr.plot)
+
+## some interesting correlations:
+dd %>% 
+  ggplot(aes(y = BetaSR_sp,  x = AOO, col = datasetID, fill = datasetID))+
+  geom_point()+
+  #scale_x_log10()+
+  geom_smooth()+
+  ggthemes::theme_par()+
+  facet_wrap(~datasetID, scales = "free")
+
+
+```
+
+```{r}
+## atlas vars PCA
+# Select only variables that start with "atlas"
+atlas_vars <- dd %>%
+  select(starts_with("atlas_"), GammaSR, datasetID) %>%
+  distinct()
+set.seed(123)
+pca_res <- prcomp(atlas_vars %>% select(-datasetID), center = T, scale. = T)
+p <- autoplot(pca_res, data = atlas_vars, colour = 'datasetID',  loadings = TRUE, loadings.label = TRUE, loadings.label.size = 3)
+ggplotly(p)
+
+
+pca_res$rotation
+
+# Eigenvalues (variance explained by each PC)
+pca_var <- pca_res$sdev^2
+pca_var_explained <- pca_var / sum(pca_var)
+
+# Scree plot of variance explained
+qplot(1:length(pca_var), pca_var_explained, geom = "line") +
+  geom_point() +
+  labs(x = "Principal Component", y = "Proportion of Variance Explained",
+       title = "Scree Plot")
+
+# Loadings (how much each variable contributes to PCs)
+loadings <- pca_res$rotation
+loadings[,1] %>% sort(decreasing = T)
+
+# Biplot to visualize variables and observations
+biplot(pca_res, scale = 0)
+```
+
+```{r}
+## all vars pca
+all_vars <- dd %>%
+  select(datasetID, where(is.numeric)) %>%  # Select datasetID and all numeric variables
+  select(-Jaccard_dissim, -log_R2_1, -ratio_R2_1) %>%  # Remove unwanted columns
+  distinct() %>%  # Keep only unique rows
+  na.omit()  # Remove rows with missing values
+
+pca_res <- prcomp(all_vars %>% select(-datasetID), center = T, scale. = T)
+
+p1 <- autoplot(pca_res, data = all_vars, color = "datasetID",  loadings = TRUE, loadings.label = TRUE, loadings.label.size = 3) + ggthemes::theme_base()
+ggplotly(p1)  
+
+```

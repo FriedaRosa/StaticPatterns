@@ -1,0 +1,406 @@
+---
+title: "species_data.qmd"
+author: "FW"
+---
+
+# Species data & atlas grids
+
+We get data from the database and filter it based on replicated sampling, native species, record confidence
+
+### Libraries
+
+```{r}
+#| message: false
+#| warning: false
+#| error: false
+#| output: false
+
+package_list <- c("RPostgres", "here", "askpass", "tidyverse", "tidyr", "dplyr", "sf", "tictoc", "skimr", "kableExtra")
+
+# Packages loading
+invisible(lapply(package_list, library, character.only = TRUE))
+
+sf_use_s2(TRUE)
+
+rm(list = ls())
+gc()
+```
+
+### Variables & paths
+
+```{r}
+vars <- list(
+  predictors =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/PhD_Projects/Project-folders/StaticPredictors/Data/",
+  out =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/StaticPatterns/Data/output/1_data/",
+  data_sf =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/StaticPatterns/Data/input/data_sf.rds",
+  data =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/StaticPatterns/Data/input/data.rds",
+  grid =
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/StaticPatterns/Data/input/grid.rds",
+  atlas_names = setNames(
+    factor(c(5, 6, 13, 26)),
+    c("Czechia", "NewYork", "Japan", "Europe")
+  ),
+  time_periods = c(1, 2),
+  desired_levels = factor(c("1", "2", "4", "8", "16", "32", "64", "128"),
+    ordered = T,
+    levels = c("1", "2", "4", "8", "16", "32", "64", "128")
+  ),
+  crs = c(
+    "Czechia" = "epsg:5514",
+    "NewYork" = "epsg:32118",
+    "Japan" = "epsg:6684",
+    "Europe" = "epsg:3035"
+  ),
+  ## SQL queries ##
+  sql_query_grid = "SELECT * FROM \"MOBI_geometry\" WHERE \"datasetID\" IN (5,6,13,26)",
+  sql_query_data = "
+SELECT \"datasetID\", \"scalingID\", \"siteID\", \"startYear\", \"croppedArea\", \"verbatimIdentification\", \"scientificName\", \"centroidDecimalLongitude\", \"centroidDecimalLatitude\"
+FROM \"MOBI_vw_FINAL_presence_records\"
+WHERE \"croppedArea\" IS NOT NULL
+  AND (\"datasetID\" <> 26 OR \"recordFilter\" IN (1, 2))
+  AND (
+    (\"datasetID\" = 5 AND \"startYear\" IN (1985, 2001))
+    OR (\"datasetID\" = 6 AND \"startYear\" IN (1980, 2000))
+    OR (\"datasetID\" = 13 AND \"startYear\" IN (1974, 1997))
+    OR (\"datasetID\" = 26 AND \"startYear\" IN (1972, 2013))
+  )",
+  Documentation = "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/StaticPatterns/Documentation/"
+)
+```
+
+## Connect to MOBI data base
+
+The database is a group-internal database with temporally replicated atlas data that have been standardized to the same format for combined analyses of atlases from different regions.
+
+Additionally, we created a sequence of aggregated country-grids by always merging 4 neighboring cells to a single large one. This aggregation process was done until the whole region was captured in a single cell, thereby decreasing the resolution of the data.
+
+### Selected datasets
+
+-   datasetID: 5,6,13,26 (Czechia, New York, Japan, Europe)
+
+-   first and second atlas replication (pre-2000 vs. post-2000)
+
+Notes:
+
+-   recordFilter has information to filter ebba to yield only the ebba change data (we will apply this filter on the database level while retrieving it)
+
+-   croppedArea is the area of the geographical boundary but is missing for small islands that are not part of the GADM. This is mostly relevant in Japan but also concerns 1 cell in New York state and a couple in (northern) europe/iceland etc. We will exclude them while retrieving the data.
+
+-   startYear has different time periods. For CZ and JP these are 3 replicates and for EU and NY it's two. To standardize the amount of data for all datasets we only use the time periods that are comparable, i.e., pre-2000 and post-2000 (where pre-2000 is samplingPeriodID = 1 and post-2000 is samplingPeriodID = 2) (we will apply this filter on the database level while retrieving it)
+
+    -   cz: 1985, 2001
+
+    -   jp: 1974, 1997
+
+    -   ny: 1980, 2000
+
+    -   eu: 1974, 2013
+
+        +-------------+-------------+-------------------+----------------+
+        | datasetID   | startYear   | sampling PeriodID | include_binary |
+        |             |             |                   |                |
+        | \           | \           | \                 |                |
+        | \<int\>     | \<int\>     | \<int\>           |                |
+        +============:+============:+==================:+================+
+        | 5           | 1985        | 1                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+        | 5           | 2001        | 2                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+        | 5           | 2014        | 3                 | 0              |
+        +-------------+-------------+-------------------+----------------+
+        | 6           | 1980        | 1                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+        | 6           | 2000        | 2                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+        | 13          | 1974        | 1                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+        | 13          | 1997        | 2                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+        | 13          | 2016        | 3                 | 0              |
+        +-------------+-------------+-------------------+----------------+
+        | 26          | 1972        | 1                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+        | 26          | 2013        | 2                 | 1              |
+        +-------------+-------------+-------------------+----------------+
+
+    In the part below, we will filter the data already based on the conditions mentioned above and save three different input (original) objects:\
+
+    -   species data (table)\
+    -   grids (including cells not sampled)\
+    -   sampled + grids (including cells not sampled)
+
+```{r}
+#| eval: false
+# Connect to the database
+con <- dbConnect(Postgres(),
+  dbname = "MOBI_atlases_testing",
+  host = "localhost",
+  port = 5432,
+  user = "frieda",
+  password = askpass::askpass("Password: ")
+)
+
+# filtered data:
+tic()
+data <- tbl(con, sql(vars$sql_query_data)) %>%
+  collect() %>%
+  mutate(samplingPeriodID = case_when(
+    datasetID == 5 & startYear == 1985 ~ 1,
+    datasetID == 5 & startYear == 2001 ~ 2,
+    datasetID == 6 & startYear == 1980 ~ 1,
+    datasetID == 6 & startYear == 2000 ~ 2,
+    datasetID == 13 & startYear == 1974 ~ 1,
+    datasetID == 13 & startYear == 1997 ~ 2,
+    datasetID == 26 & startYear == 1972 ~ 1,
+    datasetID == 26 & startYear == 2013 ~ 2,
+    TRUE ~ NA_integer_ # Default case: NA if no match
+  )) %>%
+  distinct(datasetID, scalingID, siteID, samplingPeriodID, verbatimIdentification, .keep_all = TRUE)
+toc() # 40 seconds
+
+# grids:
+grids <- st_read(con, query = vars$sql_query_grid)
+
+
+# create sf that includes cells not sampled at all
+data_sf <- grids %>%
+  left_join(data)
+
+
+# save METADATA for atlases to documentation file:
+meta <- tbl(con, "MOBI_dataset") %>%
+  filter(datasetID %in% c(5, 6, 13, 26))
+write.csv(meta, paste0(vars$Documentation, "METADATA_datasets.csv"))
+
+# write to input data folder
+saveRDS(grids, vars$grid)
+saveRDS(data, vars$data) # filtered by sampling period & croppedArea & recordFilter
+saveRDS(data_sf, vars$data_sf) # filtered by sampling period & croppedArea & recordFilter but with unsampled cells as NA in verbatimIdentification
+
+# disconnect from MOBI db
+dbDisconnect(con)
+```
+
+```{r}
+#| echo: false
+
+# Load data
+grids <- readRDS(vars$grid)
+data <- readRDS(vars$data)
+data_sf <- readRDS(vars$data_sf)
+meta <- read.csv(paste0(vars$Documentation, "METADATA_datasets.csv"))
+```
+
+## Inspect data
+
+```{r}
+# Skim by group
+data %>%
+  select(
+    verbatimIdentification, scientificName,
+    datasetID, samplingPeriodID,
+    siteID, scalingID
+  ) %>%
+  group_by(datasetID, samplingPeriodID) %>%
+  skim()
+
+meta <- data %>%
+  group_by(datasetID, scalingID, samplingPeriodID) %>%
+  summarize(
+    n_sp = n_distinct(verbatimIdentification),
+    n_sp_corr = n_distinct(scientificName),
+    n_cells = n_distinct(siteID)
+  )
+meta
+
+meta %>%
+  write.csv(paste0(vars$Documentation, "initial_filter_METADATA.csv"))
+```
+
+## Pre-process atlas data
+
+### Join data with time periods and grids
+
+(NAs are from cells that have not been sampled)
+
+```{r}
+# Join data with time periods and grids
+data_sf2 <- data_sf %>%
+  group_by(datasetID, scalingID, siteID, samplingPeriodID) %>%
+  mutate(cell_sampled = if_else(is.na(verbatimIdentification), 0, 1)) %>%
+  ungroup()
+
+glimpse(data_sf2)
+```
+
+### Indicator for repeated sampling of cells
+
+```{r}
+# Create indicator for repeated sampling
+cells_rep <- data_sf2 %>%
+  st_drop_geometry() %>%
+  distinct(datasetID, scalingID, siteID, samplingPeriodID, cell_sampled) %>%
+  group_by(datasetID, scalingID, siteID) %>%
+  dplyr::summarise(
+    cell_sampling_repeats = sum(cell_sampled), .groups = "keep"
+  )
+glimpse(cells_rep)
+
+# Merge indicators and clean data
+data_sf3 <- data_sf2 %>%
+  left_join(cells_rep) %>%
+  select(
+    datasetID, scalingID, siteID,
+    cell_sampling_repeats, samplingPeriodID,
+    verbatimIdentification, scientificName,
+    centroidDecimalLongitude, centroidDecimalLatitude,
+    croppedArea
+  ) %>%
+  unique()
+glimpse(data_sf3)
+
+
+skim(data)
+```
+
+```{r}
+#|echo: false
+
+rm(data, grids, cells_rep, data_sf, data_sf2)
+```
+
+### Introduced species
+
+(Excluding all species that are introduced in some area over the whole dataset). There are some species in europe that are native in some parts and introduced in others. We expect introduced species to show a different spatial pattern and different relatonships with temporal change than native species. We thus dropped these species from the data.
+
+See anxiliary R script to determine which species are invasive. Information on species introductions based on BirdLife international 2024.
+
+```{r}
+#| eval: false
+here::here("anxiliary_code/filter_introduced_species.qmd")
+```
+
+```{r}
+# output from anxiliary code:
+introduced <- read.csv(paste0(vars$Documentation, "invasive_species.csv")) %>%
+  select(sci_name, datasetID) %>%
+  rename("scientificName" = "sci_name")
+
+
+introduced$introduced <- 1 # set introduction to 1
+skim(introduced)
+introduced %>% 
+  kableExtra::kable()
+
+# remove introduced species
+data_sf4 <- data_sf3 %>%
+  left_join(introduced) %>%
+  # make column binary:
+  mutate(introduced = case_when(is.na(introduced) ~ 0, .default = 1)) %>%
+  filter(introduced == 0) # remove them
+
+# removed species:
+setdiff(unique(data_sf3$verbatimIdentification), unique(data_sf4$verbatimIdentification)) %>%
+  write.csv(paste0(vars$Documentation, "META_removed_introduced_sp.csv"))
+
+# drop geometry from sf without introduced species:
+data <- data_sf4 %>%
+  st_drop_geometry()
+```
+
+### Species lost or gained completely
+
+```{r}
+# Filter species data
+all_sp_raw <- data %>%
+  filter(scalingID == 1) %>%
+  distinct(datasetID, samplingPeriodID, verbatimIdentification)
+
+lost_gained_sp <- lapply(vars$atlas_names, function(atlas) {
+  df <- all_sp_raw %>% filter(datasetID == atlas)
+  sp1 <- df %>%
+    filter(samplingPeriodID == 1) %>%
+    pull(verbatimIdentification)
+  sp2 <- df %>%
+    filter(samplingPeriodID == 2) %>%
+    pull(verbatimIdentification)
+  list(lost = setdiff(sp1, sp2), gained = setdiff(sp2, sp1))
+})
+
+names(lost_gained_sp) <- names(vars$atlas_names)
+```
+
+Since we are dropping some cells, it might be that we accidentally remove a single presence of species and thereby remove them from a whole sampling period. This will lead to NAs when trying to calculate change from it. We are therefore checking that only species are kept that are present in both time periods.
+
+```{r}
+# Filter species sampled twice (in cells sampled twice)
+common_sp <- data %>%
+  filter(cell_sampling_repeats == 2, scalingID == 1) %>%
+  group_by(datasetID, verbatimIdentification) %>%
+  dplyr::summarise(sp_sampling_repeats = n_distinct(samplingPeriodID), .groups = "drop")
+
+# those sampled only once
+excluded_sp <- data %>%
+  filter(cell_sampling_repeats == 2, scalingID == 1) %>%
+  group_by(datasetID, verbatimIdentification) %>%
+  mutate(sp_sampling_repeats = n_distinct(samplingPeriodID)) %>%
+  filter(sp_sampling_repeats == 1) %>%
+  ungroup() %>%
+  select(datasetID, verbatimIdentification, samplingPeriodID, sp_sampling_repeats) %>%
+  unique()
+
+excluded_sp
+
+
+# Summarize dropped species:
+excluded_sp %>%
+  group_by(datasetID, samplingPeriodID) %>%
+  summarise(n_sp = n_distinct(verbatimIdentification)) %>%
+  mutate(
+    lost = case_when(samplingPeriodID == 1 ~ n_sp),
+    gained = case_when(samplingPeriodID == 2 ~ n_sp)
+  ) %>%
+  group_by(datasetID) %>%
+  summarise(
+    lost = sum(lost, na.rm = TRUE),
+    gained = sum(gained, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+## Apply filters:
+
+```{r}
+# final data
+presence_data_filt <- data %>%
+  full_join(common_sp) %>%
+  filter(cell_sampling_repeats == 2, sp_sampling_repeats == 2) %>%
+  mutate(cell_sampling_repeats = as.factor(cell_sampling_repeats)) %>%
+  unique()
+
+# final sf
+data_sf5 <- data_sf4 %>%
+  left_join(common_sp)
+```
+
+## save results
+
+all saved in
+
+-   Data/output/1_data = processed data
+
+-   Data/input/ = raw data (filter on sql-level)
+
+```{r}
+# Save results
+saveRDS(data_sf5, here::here("Data", "output", "1_data", "1_data_sf.rds"))
+saveRDS(presence_data_filt, here::here("Data", "output",  "1_data", "1_data_filtered.rds"))
+```
+
+```{r}
+sessionInfo()
+```

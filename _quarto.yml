@@ -1,0 +1,43 @@
+project:
+  type: book
+
+book:
+  title: "StaticPatterns"
+  author: "Friederike Wölke"
+  date: "21.2.2025"
+  chapters:
+    - index.qmd
+    # - 0a_intro.qmd
+    # - 0b_summary.qmd
+    - 1_species_data.qmd
+    - 2_atlas_predictors.qmd
+    - 3_other_predictors.qmd
+    - 4_inspect_data.qmd
+    #- part: "machine_learning"
+      #chapters:
+      # -5_models_J.qmd
+     # - jaccard_ranger.qmd
+     #- logRatio_ranger.qmd
+    #- part: "interpretation"
+      #chapters:
+      #- var_imp.qmd
+      #- var_part.qmd
+      #- xAI.qmd
+    #- part: "additional_figures"
+      #chapters:
+      #- additional_figures.qmd
+    - references.qmd
+
+bibliography: references.bib
+
+format:
+  html:
+    toc: true
+    code-fold: false
+    embed-resources: true
+    theme: cosmo
+  pdf:
+    documentclass: scrreprt
+
+editor: visual
+

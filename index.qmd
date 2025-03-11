@@ -1,0 +1,5 @@
+# Preface {.unnumbered}
+
+This is a Quarto book containing analyses for studying static patterns from breeding bird atlas data.
+
+Unfortunately, most data is not openly shareable due to conditions opposed by the data owners. Therefore we provide a comprehensive markdown book that includes all steps and outputs as rendered .html files.
