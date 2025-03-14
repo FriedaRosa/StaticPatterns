@@ -1,0 +1,797 @@
+---
+title: "other_predictors"
+---
+
+# Calculate predictors
+
+Always run the next chunk please, then skip to the part that should be calculated. The whole script is quite heavy and takes very long to compute in one run.
+
+```{r}
+#| message: false
+#| warning: false
+#| error: false
+#| output: false
+
+
+library(dplyr)
+library(sf)
+library(skimr)
+library(kableExtra)
+library(readxl)
+```
+
+```{r}
+#| label: configurations
+
+rm(list=ls()) # start clean
+
+vars <- list(
+  predictors = 
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/PhD_Projects/Project-folders/StaticPredictors/Data/",
+  out = 
+    "c:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/StaticPatterns/Data/output/1_data/single_predictors/",
+  atlas_names = setNames(factor(c(5, 6, 13, 26)), 
+                         c("Czechia", "NewYork", "Japan", "Europe")),
+  time_periods = c(1, 2),
+  desired_levels = factor(c("1", "2", "4", "8", "16", "32", "64", "128"), 
+                          ordered = T, 
+                          levels = c("1", "2", "4", "8", "16", "32", "64", "128")),
+  crs = c("Czechia" = "epsg:5514", 
+          "NewYork" = "epsg:32118", 
+          "Japan" = "epsg:6684", 
+          "Europe" = "epsg:3035"),
+  avonet = "C:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/PhD_Projects/Project-folders/StaticPredictors/Data/AVONET/AVONET Supplementary dataset 1.xlsx",
+  tax = "C:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/Documents/GitHub/Project-folders/StaticPatterns/Documentation/Tax_lookup.csv"
+)
+
+```
+
+## Species Predictors
+
+### Mean Co-occurrence probability
+
+```{r}
+#| eval: false
+#| code-fold: true
+
+process_co_occurrence <- function(species_data, atlas_names) {
+  
+  #browser()
+  
+  # Helper function to create species-by-site matrices
+  create_comm_matrices <- function(data, time_values) {
+    lapply(time_values, function(time_val) {
+      fossil::create.matrix(
+        data, 
+        tax.name = "verbatimIdentification", 
+        locality = "siteID", 
+        time.col = "samplingPeriodID", 
+        time = time_val, 
+        abund = FALSE
+      )
+    })
+  }
+  
+  # Helper function to calculate co-occurrence metrics
+  calculate_cooccurrence <- function(comm_matrix) {
+    cooccur::cooccur(comm_matrix, spp_names = TRUE)$results %>%
+      group_by(sp1_name) %>%
+      dplyr::summarise(
+        mean_prob_cooccur = mean(prob_cooccur, na.rm = TRUE) # mean per species
+      )
+  }
+  
+  # Process each atlas and compute co-occurrence results
+  co_occ_list <- lapply(atlas_names, function(atlas_name) {
+    
+    #browser()
+    
+    # Filter data for the current atlas
+    comm_dat <- species_data %>%
+      filter(datasetID == atlas_name) %>%
+      distinct(samplingPeriodID, verbatimIdentification, siteID) %>%
+      as.data.frame()
+    
+    # Create community matrices for time periods
+    comm_matrices <- create_comm_matrices(comm_dat, time_values = c("1", "2"))
+    
+    # Calculate co-occurrence results for both time periods
+    co_occ_results_l <- lapply(
+      seq_along(comm_matrices), function(tp_idx) {
+        
+        calculate_cooccurrence(comm_matrices[[tp_idx]]) %>%
+          mutate(samplingPeriodID = as.integer(tp_idx),
+                 datasetID = atlas_name)
+        
+      }) 
+    
+    saveRDS(co_occ_results_l, here::here(paste0("Data/output/1_data/single_predictors/co_occ_res/co_occ_res_list_", atlas_name, ".rds" )))
+    
+    co_occ_results <- co_occ_results_l %>% 
+      bind_rows() %>%
+      dplyr::rename(verbatimIdentification = sp1_name) 
+    
+    co_occ_results$datasetID <- as.integer(as.character(co_occ_results$datasetID))
+    
+    # Combine with original species data
+    species_data %>%
+      filter(datasetID == atlas_name) %>%
+      distinct() %>%
+      ungroup() %>%
+      left_join(co_occ_results)
+    
+  })
+  
+  # Combine results for all atlases into a single dataframe
+  final_df <- bind_rows(co_occ_list)
+  return(final_df)
+  
+}
+
+```
+
+```{r}
+#| eval: false
+
+library(fossil)
+library(cooccur)
+
+species_data <- readRDS(here::here("Data/output/1_data/1_occ_data_final.rds")) %>% 
+  filter(scalingID == 1) %>% 
+  distinct(datasetID, samplingPeriodID, verbatimIdentification, siteID) 
+
+mean_cooccurrence_df <- process_co_occurrence(
+  species_data = species_data, 
+  atlas_names = vars$atlas_names
+)
+
+saveRDS(mean_cooccurrence_df, here::here("Data/output/1_data/single_predictors/2_cooccurrence.rds"))
+
+```
+
+```{r}
+#| echo: false
+library(ggplot2)
+
+mean_cooccurrence_df <- readRDS(here::here("Data/output/1_data/single_predictors/2_cooccurrence.rds")) 
+
+mean_cooccurrence_df %>%
+  group_by(datasetID, samplingPeriodID) %>%
+  skim()
+
+mean_cooccurrence_df %>%
+  ggplot(aes(x = mean_prob_cooccur, fill = factor(datasetID)))+
+  facet_wrap(~ interaction(samplingPeriodID, datasetID))+
+  geom_histogram(position = "identity", alpha = 0.3)+
+  geom_density(alpha = 0.3)+
+  ggthemes::theme_base()
+```
+
+There are 30 NAs in the co-occ probability.
+
+```{r}
+mean_cooccurrence_df %>% 
+  skim()
+```
+
+### Diversity Metrics
+
+```{r}
+#| eval: false
+#| label: H3-Diversity-Metrics
+
+occ_data_final <- readRDS(here::here("Data/output/1_data/1_occ_data_final.rds"))
+
+# Diversity Metrics
+div_metrics <- occ_data_final %>% 
+  ungroup() %>%
+  #filter(scalingID == 1) %>%
+  dplyr::select(datasetID, samplingPeriodID, siteID, verbatimIdentification) %>%
+  distinct() %>%
+  
+  group_by(datasetID, samplingPeriodID) %>%
+  dplyr::mutate(GammaSR = sum(n_distinct(verbatimIdentification))) %>%
+  ungroup() %>%
+  
+  group_by(datasetID, samplingPeriodID, siteID) %>%
+  dplyr::mutate(AlphaSR = sum(n_distinct(verbatimIdentification))) %>%
+  dplyr::mutate(BetaSR = GammaSR / AlphaSR) %>%
+  ungroup() %>%
+  
+  group_by(datasetID, samplingPeriodID, verbatimIdentification) %>%
+  dplyr::mutate(AlphaSR_sp = mean(AlphaSR)) %>%
+  dplyr::mutate(BetaSR_sp = GammaSR / AlphaSR_sp) %>%
+  dplyr::select(datasetID, samplingPeriodID, verbatimIdentification, AlphaSR_sp, BetaSR_sp, GammaSR) %>%
+  distinct() %>% 
+  ungroup()
+
+saveRDS(div_metrics, here::here("Data/output/1_data/single_predictors/2_div_metrics.rds"))
+```
+
+```{r}
+#| echo: false
+
+div_metrics <- readRDS(here::here("Data/output/1_data/single_predictors/2_div_metrics.rds")) %>% ungroup()
+
+```
+
+```{r}
+div_metrics %>% 
+  group_by(datasetID, samplingPeriodID) %>% 
+  skim()
+```
+
+### AVONET
+
+```{r}
+#| eval: false
+#| label: avonet traits
+
+sci_name <- readRDS(here::here("Data/output/1_data/1_data_filtered.rds")) %>% 
+  distinct(verbatimIdentification, scientificName) # BirdLife 2024 taxonomy
+Tax <- read.csv(vars$tax)
+
+# Avonet:
+traits <- read_excel("C:/Users/wolke/OneDrive - CZU v Praze/Dokumenty/PhD_Projects/Project-folders/StaticPredictors/Data/AVONET/AVONET Supplementary dataset 1.xlsx",
+                     sheet = "AVONET1_BirdLife") %>%
+  dplyr::select(
+  Species1, Family1, Order1, # tax info
+  Habitat, Migration,Trophic.Level, Trophic.Niche,Primary.Lifestyle, # char
+  Beak.Width,'Hand-Wing.Index', Mass, Habitat.Density # dbl
+  ) %>%
+  mutate(across(c(Habitat, Migration, Trophic.Level, Trophic.Niche, Primary.Lifestyle, Habitat.Density), as.factor)) %>%
+  rename("ScientificName2018" = "Species1") %>%
+  right_join(Tax %>% select(verbatimIdentification, scientificName, ScientificName2018)) %>%
+  select(-ScientificName2018)
+
+saveRDS(traits, here::here("Data/output/1_data/single_predictors/2_Avonet.rds"))
+
+```
+
+```{r}
+#| echo: false
+traits <- readRDS(here::here("Data/output/1_data/single_predictors/2_Avonet.rds"))
+```
+
+We have 10 species for which no data from AVONET was matched (10 rows NA in traits)
+
+```{r}
+traits %>% 
+  skim()
+```
+
+### BirdTree
+
+```{r}
+#| eval: false
+
+Tax <- read.csv(vars$tax)[,-1]
+
+library(ape)
+library(phyloregion) # faster for large data than picante function
+
+tree <- ape::read.tree(
+  here::here("Data/input/MRC_consensus_BirdTree.tre"))
+
+
+#phyloregion package:
+pd <- phyloregion::evol_distinct(
+  tree,
+  type = "fair.proportion", 
+  scale = FALSE, 
+  use.branch.lengths = TRUE) %>% 
+  as.data.frame() %>%
+  tibble::rownames_to_column(var = "tip.label") %>%
+  rename(pd = ".") %>%
+  right_join(Tax) %>%
+  select(verbatimIdentification, scientificName, pd)
+
+# save to file  
+saveRDS(pd, here::here("Data/output/1_data/single_predictors/2_phylo_distinct.rds"))
+```
+
+```{r}
+#| echo: false
+pd <- readRDS(here::here("Data/output/1_data/single_predictors/2_phylo_distinct.rds"))
+```
+
+We have 10 species without pd data (10 NAs in pd)
+
+```{r}
+# Summary statistics
+skim(pd)
+
+# NAs
+pd %>% filter(is.na(pd))
+```
+
+### IUCN Threat status
+
+```{r}
+#| echo: false
+IUCN_REDLIST_KEY <- "DwikYETjk5iHVudwZdUDhCYVT5fqFjScBnkE"
+
+
+
+iucn_summary("Pica pica", key = IUCN_REDLIST_KEY)
+```
+
+```{r}
+#| eval: false
+library(taxize)
+Tax <- read.csv(vars$tax)$scientificName %>% na.omit()
+IUCN.list <- iucn_summary(Tax, 
+                          distr.detail = F, 
+                          key = IUCN_REDLIST_KEY)
+IUCN <- iucn_status(IUCN.list) 
+IUCN_df <- as.data.frame(IUCN, row.names = names(IUCN)) %>% 
+  rownames_to_column(var = "verbatimIdentification_BirdLife") %>% 
+  right_join(Tax %>% distinct(verbatimIdentification, scientificName)) %>%
+  distinct(verbatimIdentification, scientificName, IUCN) %>%
+  mutate(IUCN = case_when(is.na(IUCN) ~ "DD",
+                          .default = IUCN))
+
+## Save Output## Save Output## Save Output
+saveRDS(IUCN_df, here::here("Data/output/1_data/single_predictors/2_IUCN.rds"))
+
+```
+
+```{r}
+#| echo: false
+IUCN_df <- readRDS(here::here("Data/output/1_data/single_predictors/2_IUCN.rds")) 
+```
+
+```{r}
+# Summary of IUCN categories in the data:
+IUCN_df %>% skim()
+library(ggplot2)
+
+IUCN_df %>% 
+  ggplot(aes(x = IUCN)) +
+  geom_bar()+
+  theme_linedraw()+
+  scale_y_log10()+
+  ylab("log10(count)")+
+  xlab("IUCN status 2024")
+```
+
+```{r}
+#| echo: false
+DB_PW <- "W@b&GH!4"
+USER <- "frieda"
+```
+
+### BirdLife Range Maps
+
+```{r}
+#| message: false
+#| warning: false
+#| error: false
+#| output: false
+
+package_list <- c("tidyr", "sf", "RPostgres", "terra")
+x <- lapply(package_list, library, character.only = TRUE) # read packages
+rm(x)
+```
+
+#### get bird life 2024 data
+
+```{r}
+#| eval: false
+
+# connect to data base
+con <- dbConnect(Postgres(),
+  dbname = "Birds_of_the_World",
+  host = "localhost",
+  port = 5432,
+  user = USER,
+  password = DB_PW
+)
+
+
+dbListTables(con)
+
+# create sql query for species in our data:
+Tax <- read.csv(vars$tax)[,-1]
+
+# get species names
+name_vector <- Tax %>% 
+  pull(scientificName) %>% 
+  unique()
+
+# BirdLife International Range Maps:
+name_vector_sql <- paste0("'", paste(name_vector, collapse = "','"), "'")
+
+# Construct the query
+sql_query <- paste0(
+  "SELECT \"sci_name\", \"presence\", \"origin\", \"seasonal\",\"geometry\" ",
+  "FROM \"MOBI_botw_multipolygon_2024\" ",
+  "WHERE \"sci_name\" IN (", name_vector_sql, ") ",
+  "AND seasonal IN (1, 2) ", # Resident & Breeding Season (not non-breeding or passage)
+  "AND origin IN (1, 2) ",   # Native or reintroduced (not introduced or vagrant)
+  "AND presence IN (1, 2, 3)" # Extant, probably extant, possibly extant (not possibly extinct or extinct)
+)
+
+```
+
+#### save shp
+
+```{r}
+#| label: BL rangemaps (v9.1)
+#| eval: false
+
+tic()
+BirdLife <- st_read(con, query = sql_query) # time:
+toc()
+
+st_write(BirdLife, here::here("Data/input/shp/BirdLife.shp"), append = F)
+
+BirdLife %>% 
+  st_drop_geometry() %>% 
+  skim()
+```
+
+#### save .tifs (global species ranges)
+
+```{r}
+#| eval: false
+if(!"rasterSp" %in% installed.packages()[,"Package"]) remotes::install_github("RS-eco/rasterSp", build_vignettes = T)
+
+if(!"climateNiche" %in% installed.packages()[,"Package"]) remotes::install_github("RS-eco/climateNiche", build_vignettes = T)
+
+
+library(rasterSp)
+
+rasterizeRange(dsn = here::here("Data/input/shp/BirdLife.shp"),
+               id = "sci_name", touches=TRUE, save = TRUE, resolution = 1,
+               path = here::here("Data/input/species_rasters//")
+)
+```
+
+#### match ranges with climate
+
+```{r}
+#| eval: false
+library(terra)
+
+# Read individual species .tifs back in:
+r_birds <- rast(
+  list.files(here::here("Data/input/species_rasters/"), 
+             pattern =".tif", 
+             full.names = TRUE)
+  )
+
+species_names_BL <- list.files(
+  here::here("Data/input/species_rasters/"), 
+  full.names = FALSE
+  ) %>%
+  stringr::str_remove_all("\\.tif$") %>%  # Remove ".tif" extension
+  stringr::str_replace_all("_1$", "") %>% # Remove "_1" at the end
+  stringr::str_replace_all("_", " ")      # Replace underscores with spaces
+
+names(r_birds) <- species_names_BL
+
+# Read Climate data
+climate_stack_agg <- readRDS(here::here("Data/input/climate_stack.rds"))
+
+
+# Extract species coordinates
+try({
+  coords_sp <- lapply(seq_along(names(r_birds)), function(i) {
+    r_b <- r_birds[[i]]
+    
+    # Match resolution, extent, and projection of climate raster to species raster
+    r_b_matched <- project(r_b, climate_stack_agg, method = "average")
+    
+    # Convert to data frame and add species column
+    r_b2 <- as.data.frame(r_b_matched, xy = TRUE) %>%
+      dplyr::rename(Presence = names(r_b)) %>%
+      dplyr::mutate(species = names(r_birds)[i])
+    
+    return(r_b2)
+  })
+  
+  coords_df <- do.call(rbind, coords_sp)
+})
+```
+
+#### climate space
+
+```{r}
+#| eval: false
+
+library(ggfortify)
+library(plotly)
+library(ggplot2)
+
+library(factoextra)
+# Climate PCA (construct global climate space)
+pca_res <- prcomp(climate_stack_agg, scale. = T)
+summary(pca_res)
+
+p_pc1 <- fviz_contrib(pca_res, choice = "var", axes = 1, top = 11) + ggthemes::theme_base() + theme(axis.text.x = element_text(angle = 45, hjust = 1, size = )) 
+ggsave("figures/1_data/PC1_var_contributions.pdf", p_pc1)
+p_pc2 <- fviz_contrib(pca_res, choice = "var", axes = 2, top = 11) + ggthemes::theme_base() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("figures/1_data/PC2_var_contributions.pdf", p_pc2)
+
+p <- autoplot(pca_res, loadings = TRUE, loadings.label = TRUE, loadings.label.size = 3)
+ggplotly(p)
+# extract loadings from PCA for documentation
+pca_res$rotation %>% 
+  write.csv(here::here("Documentation/META_PCA_loadings_climNiche.csv"))
+
+
+
+# Project birds to climate space
+# Unique species
+sp_v <- unique(coords_df$species)
+
+# Process climate values and PCA projections
+results <- lapply(sp_v, function(species_name) {
+  # Filter coordinates for the current species
+  sp <- coords_df %>%
+    filter(species == species_name) %>%
+    dplyr::select(-species, -Presence)
+  
+  # Extract climate values for the species
+  clim_vals <- extract(climate_stack_agg, sp, xy = TRUE, df = TRUE) %>%
+    as.data.frame() %>%
+    mutate(species = species_name)
+  
+  # Perform PCA projections
+  sp_pca <- predict(pca_res, clim_vals[, 2:14])[, 1:2] %>%
+    as.data.frame() %>%
+    mutate(species = species_name)
+  
+  # Return both climate values and PCA results
+  list(clim_vals = clim_vals, sp_pca = sp_pca)
+})
+
+# Combine results
+clim_vals_all <- do.call(rbind, lapply(results, `[[`, "clim_vals"))
+pca_all <- do.call(rbind, lapply(results, `[[`, "sp_pca")) %>% 
+  data.frame()
+
+```
+
+#### climate niche breadth
+
+```{r}
+#| eval: false
+setdiff(Tax$scientificName, pca_all$species)
+setdiff(pca_all$species, Tax$scientificName)
+
+Tax <- read.csv(vars$tax) %>% select(verbatimIdentification, scientificName)
+# Calculate climate niche breadth
+Niches_df <- pca_all %>%
+  group_by(species) %>%
+  mutate(PC1_sd = sd(PC1),
+         PC2_sd = sd(PC2)) %>%
+  distinct(species, PC1_sd, PC2_sd) %>%
+  dplyr::rename("scientificName" = "species") %>%
+  left_join(Tax)
+
+saveRDS(Niches_df, here::here("Data/output/1_data/single_predictors/2_ClimateNiches_df.rds"))
+
+Niches_df %>% 
+  skim()
+```
+
+```{r}
+#| eval: false
+
+BirdLife <- st_read(here::here("Data/input/shp/"))
+
+# Calculate global range size for each species (group)
+BirdLife_list <- BirdLife %>%  
+  group_by(sci_name) %>%   # Group by species
+  group_split()
+sf_use_s2(FALSE)
+
+
+Mollweide_CRS <- 'PROJCS["ProjWiz_Custom_Mollweide",
+ GEOGCS["GCS_WGS_1984",
+  DATUM["D_WGS_1984",
+   SPHEROID["WGS_1984",6378137.0,298.257223563]],
+  PRIMEM["Greenwich",0.0],
+  UNIT["Degree",0.0174532925199433]],
+ PROJECTION["Mollweide"],
+ PARAMETER["False_Easting",0.0],
+ PARAMETER["False_Northing",0.0],
+ PARAMETER["Central_Meridian",0],
+ UNIT["Meter",1.0]]'
+
+sf_use_s2(FALSE)
+
+RangeSizes_l <- lapply(BirdLife_list, function(sp_data) {
+  sp_data %>%
+    group_by(sci_name) %>%
+    st_transform(crs = Mollweide_CRS) %>% 
+    st_make_valid() %>%
+    summarise() %>%
+    mutate(GlobRangeSize = as.numeric(st_area(.))) %>%
+    st_drop_geometry() %>%
+    group_by(sci_name) %>%
+    summarise(
+      GlobRangeSize_km2 = sum(GlobRangeSize, na.rm = TRUE),  # Sum range sizes for the species
+      .groups = "keep") 
+})
+
+
+RangeSizes <- do.call(rbind, RangeSizes_l)
+Tax <- read.csv(vars$tax) %>% select(verbatimIdentification, scientificName)
+RangeSizes <- RangeSizes %>%
+  rename(scientificName = sci_name) %>%
+  right_join(Tax, by = "scientificName") %>%
+  distinct(scientificName, verbatimIdentification, .keep_all = TRUE) %>%
+mutate(GlobRangeSize_km2 = GlobRangeSize_km2/1000)
+
+saveRDS(RangeSizes, here::here("Data/output/1_data/single_predictors/2_RangeSize.rds"))
+
+
+Niches_df <- readRDS(here::here("Data/output/1_data/single_predictors/2_ClimateNiches_df.rds"))
+RangeSizes <- readRDS(here::here("Data/output/1_data/single_predictors/2_RangeSize.rds"))
+
+
+BirdLife_Predictors <- Niches_df %>%
+  right_join(RangeSizes) %>%
+  distinct(verbatimIdentification, .keep_all=TRUE)
+
+colSums(is.na(BirdLife_Predictors))
+saveRDS(BirdLife_Predictors, here::here("Data/output/1_data/2_all_preds_BirdLife.rds"))
+
+```
+
+## Merge species predictors together
+
+```{r}
+#| eval: false
+#| label: H1-species-predictors
+
+predictorsSpecies <- read.csv(vars$tax) %>% 
+  select(verbatimIdentification, scientificName)
+
+
+# Read and preprocess the data
+avonet <- readRDS(here::here("Data/output/1_data/single_predictors/2_Avonet.rds"))
+
+# Merge avonet to species 
+temp1 <- predictorsSpecies %>%
+  left_join(avonet)
+
+
+
+# Merge pd tp species & avonet
+phylo <- readRDS(here::here("Data/output/1_data/single_predictors/2_phylo_distinct.rds")) %>%
+  ungroup() %>%
+  distinct(verbatimIdentification, pd, .keep_all = TRUE)
+
+temp2 <- temp1 %>% left_join(phylo)
+skim(temp2)
+
+
+# Merge range size & climate niche info
+rangesize <- readRDS(here::here("Data/output/1_data/2_all_preds_BirdLife.rds")) %>% 
+  ungroup() %>%
+  distinct(verbatimIdentification, .keep_all = TRUE) 
+
+temp3 <- temp2 %>% 
+  left_join(rangesize) 
+
+
+# Merge icun
+
+iucn <- readRDS(here::here("Data/output/1_data/single_predictors/2_IUCN.rds")) %>% 
+  ungroup() %>%
+  distinct(verbatimIdentification, scientificName, .keep_all = TRUE) 
+  
+temp4 <- temp3 %>% left_join(iucn) 
+
+
+# Save the merged dataset
+saveRDS(temp4, here::here("Data/output/1_data/single_predictors/2_predictorsSpecies.rds"))
+
+```
+
+### Geometry
+
+```{r}
+#| eval: false
+rm(list=setdiff(ls(), c("vars")))
+
+# I ran the scripts separately for atlases to parallelize stuff
+# they are here:
+
+geometries <- readRDS("Code/1_DataPrep/geometries_split/2_geometry_CZ.rds") %>%
+  bind_rows(readRDS("Code/1_DataPrep/geometries_split/2_geometry_NY.rds"), 
+        readRDS("Code/1_DataPrep/geometries_split/2_geometry_JP.rds"),
+        readRDS("Code/1_DataPrep/geometries_split/2_geometry_EU.rds"))
+
+saveRDS(geometries, here::here("Data/2_geometry.rds"))
+
+```
+
+### Lacunarity (Gappyness analysis)
+
+```{r}
+#| eval: false
+# I ran it as split scripts. The script is here:
+
+source("2_lacunarity.R")
+```
+
+### Spatial Autocorrelation
+
+```{r}
+#| eval: false
+#| label: H2-SAC-Metrics
+#3_SacMetrics
+
+# I ran the fast script here
+source("Code/sacMetrics_fast.R")
+
+```
+
+## Merge all predictors to one dataframe
+
+```{r}
+#| eval: false
+rm(list=ls())
+big_table <- readRDS("Data/output/1_data/2_big_table.rds")
+species_predictors <- readRDS("Data/output/1_data/single_predictors/2_predictorsSpecies.rds") # Avonet, climate niche, IUCN, range size, pd
+geometry <- readRDS("Data/output/1_data/single_predictors/2_geometry.rds") # Species ranges, Atlas geometry
+sac_metrics <- readRDS("Data/output/1_data/single_predictors/2_sacMetrics.rds")
+diversity <- readRDS("Data/output/1_data/single_predictors/2_div_metrics.rds")
+lacunarity <- readRDS("Data/output/1_data/single_predictors/2_lacunarity.rds") %>% 
+  select(-name) %>% 
+  mutate(samplingPeriodID = as.numeric(as.character(samplingPeriodID)), 
+         datasetID = as.numeric(as.character(datasetID)))
+
+lacunarity %>% group_by(datasetID, samplingPeriodID) %>% summarize(n_sp = n_distinct(verbatimIdentification))
+
+co_occurrence <- readRDS("Data/output/1_data/single_predictors/2_cooccurrence.rds") %>% distinct(samplingPeriodID, datasetID, verbatimIdentification, mean_prob_cooccur)
+
+# Merge
+predictors <- big_table %>%
+  full_join(species_predictors) %>%
+  full_join(co_occurrence) %>%
+  full_join(sac_metrics) %>%
+  full_join(diversity) %>%
+  full_join(geometry) %>%
+  full_join(lacunarity) %>%
+  distinct(datasetID, verbatimIdentification, samplingPeriodID, .keep_all = TRUE) %>%
+  mutate(
+    across(
+      where(is.character) & !matches("verbatimIdentification") & !matches("scientificName"), 
+      as.factor
+    )
+  ) %>%
+  mutate(
+    across(c("datasetID","samplingPeriodID","Habitat", "IUCN", "Habitat.Density", "Migration", "Primary.Lifestyle", "Trophic.Niche", "Trophic.Level", "Family1", "Order1"), as.factor)
+  ) %>% 
+  distinct(datasetID, samplingPeriodID, verbatimIdentification, .keep_all = TRUE) %>%
+  filter(!is.na(datasetID) & !is.na(scientificName))
+
+
+
+```
+
+```{r}
+# Checks
+predictors %>% skim()
+```
+
+```{r}
+
+predictors %>% glimpse()
+str(predictors)
+predictors %>% is.na() %>% colSums()
+
+
+
+names(predictors$D_AOO_a) <- NULL
+names(predictors$morans_I) <- NULL
+names(predictors$morans_I_p) <- NULL
+
+saveRDS(predictors, "Data/output/1_data/2_predictors.rds")
+```

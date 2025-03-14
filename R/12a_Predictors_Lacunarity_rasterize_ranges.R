@@ -48,14 +48,15 @@ all_sf <- readRDS("Data/output/1_data/1_data_sf.rds") %>%
 
 for (data_id in unique(all_sf$datasetID)){
 print(data_id)
-
+data_id <- 26
 #----------------------------------------------------------#
 # Load and Filter Data -----
 #----------------------------------------------------------#
 
 # Read spatial data
 data_sf <- all_sf %>%
-  filter(datasetID == data_id)
+  filter(datasetID == data_id) %>%
+  st_as_sf()
 
 # Read grid
 sf_grid <- readRDS(here("Data/input/grid.rds")) %>%
@@ -89,6 +90,7 @@ species_list <- unique(data_sf_with_unsampled$verbatimIdentification) %>%
 # Compute resolutions efficiently
 calculate_resolution <- function(sf_obj) {
   sf_obj %>%
+    st_make_valid() %>%
     group_split(datasetID) %>%
     map(~ {
       bbox <- st_bbox(.x)

@@ -160,9 +160,25 @@ plan(sequential)
 #----------------------------------------------------------#
 saveRDS(results, here("Data/output/1_data/2_spatial_auto.rds"))
 
-######
-#### PARALLEL
-#####
 
 
+results %>%
+  filter(is.na(morans_I_p)) %>%
+  print(n = 29) %>%
+  table()
+
+results %>%
+  group_by(datasetID, samplingPeriodID) %>%
+  filter(if_any(everything(), is.na)) %>%
+  get_summary_stats(type = "common") %>%
+  kableExtra::kable()
+
+
+results %>% filter(if_any(everything(), is.na)) %>%
+  group_by(datasetID, samplingPeriodID) %>%
+  summarise(n_sp = n_distinct(verbatimIdentification),
+            min_pres = min(presence_n),
+            max_pres = max(presence_n),
+            median_pres = median(presence_n)) %>%
+  flextable()
 

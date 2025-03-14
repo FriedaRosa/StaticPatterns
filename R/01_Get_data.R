@@ -26,13 +26,13 @@ lapply(package_list, require, character = TRUE)
 
 # Connect to the database
 con <- dbConnect(Postgres(),
-                 dbname = "MOBI_atlases_testing",
+                 dbname = "MOBI_atlases_v1",
                  host = "localhost",
                  port = 5432,
                  user = "frieda",
                  password = Sys.getenv('PASSWORD_SERVER')
 )
-
+dbListTables(con)
 #--------------------------------------------------#
 
 # Get filtered data:

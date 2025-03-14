@@ -6,6 +6,7 @@ author: "FW"
 # Data inspection
 
 ```{r}
+fix_windows_histograms()
 library(corrr)
 library(ggcorrplot)
 library(plotly)
@@ -17,23 +18,10 @@ library(tidyverse)
 
 ## Dimensionality reduction
 
-We have quite a bunch of predictors prepared that could potentially
-correlate with temporal change trends.
+We have quite a bunch of predictors prepared that could potentially correlate with temporal change trends.
 
 **H1: species traits**\
-**H2: range geometry** depicting various facets of the results of
-complex processes where many factors contribute to the final result
-(e.g., elongation of the range, fragmentation). These factors are not
-necessarily the mechanisms behind the change, but rather imprints of
-mechanism that act in concert. for example, fractal-like ranges are the
-result of processes such as colonization, extirpation, and population
-dynamics that vary in for each species, across space, time and different
-habitats - which are themselves distributed in a fractal way within
-landscapes. Therefore instead of trying to fit a model that includes
-processes and mechanisms that might be ill-informed in complex systems
-and not comprehensively capture all processes - we fit a model that
-tries to get information out of the spatial configuation and composition
-of species ranges in spatial way (as opposed to ecological way).\
+**H2: range geometry** depicting various facets of the results of complex processes where many factors contribute to the final result (e.g., elongation of the range, fragmentation). These factors are not necessarily the mechanisms behind the change, but rather imprints of mechanism that act in concert. for example, fractal-like ranges are the result of processes such as colonization, extirpation, and population dynamics that vary in for each species, across space, time and different habitats - which are themselves distributed in a fractal way within landscapes. Therefore instead of trying to fit a model that includes processes and mechanisms that might be ill-informed in complex systems and not comprehensively capture all processes - we fit a model that tries to get information out of the spatial configuation and composition of species ranges in spatial way (as opposed to ecological way).\
 **H3: diversity metrics\
 H4: atlas characteristics**
 
@@ -43,10 +31,7 @@ The problems with too many dimensions:
 
 -   too many predictors can be hard to understand or visualize
 
--   multicollinearity: between-predictor correlations can negatively
-    impact the mathematical operations used to estimate a model.
-    Predictors may be measuring the same latent effect(s) and are thus
-    correlated
+-   multicollinearity: between-predictor correlations can negatively impact the mathematical operations used to estimate a model. Predictors may be measuring the same latent effect(s) and are thus correlated
 
 ```{r}
 dd <- readRDS(here::here("Data/output/1_data/2_predictors.rds")) %>%
@@ -115,6 +100,51 @@ H2_all <- c(
   )
 
 setdiff(names(dd), c(responses, sp_id, drop_vars,H1_all, H2_all, H3_all, H4_all)) # all assigned
+
+
+###
+dd_meta <- dd %>%
+  mutate(across(-all_of(c("verbatimIdentification", "scientificName", "Family1", "Order1")), 
+                ~ as.numeric(as.character(.)))) %>%
+  tidyr::pivot_longer(cols = -all_of(c("verbatimIdentification", "scientificName", "Family1", "Order1"))) %>%
+  mutate(role = case_when(name %in% H1_all ~ "H1",
+                          name %in% H2_all ~ "H2",
+                          name %in% H3_all ~ "H3",
+                          name %in% H4_all ~ "H4",
+                          name %in% drop_vars ~ "drop",
+                          name %in% responses ~ "outcome")) %>%
+  distinct(name, role) %>% 
+  left_join(skim(dd, where(is.factor)) %>% .[c(2,7)] %>% as.data.frame() %>% mutate(class = "factor") %>% rename("name" = "skim_variable")) %>%
+  mutate(class = case_when(is.na(class) ~ "numeric",
+                           !is.na(class) ~ class)) %>%
+  write.csv(here("Documentation/predictors_choice.csv"))
+
+```
+
+```{r}
+unique(dd$Habitat) 
+plot(dd$Habitat)
+
+unique(dd$Migration)
+plot(dd$Migration)
+
+unique(dd$Trophic.Level) 
+plot(dd$Trophic.Level)
+
+unique(dd$Trophic.Niche) 
+plot(dd$Trophic.Niche)
+
+unique(dd$Primary.Lifestyle)
+plot(dd$Primary.Lifestyle)
+
+
+unique(dd$Habitat.Density)
+plot(dd$Habitat.Density)
+
+
+unique(dd$IUCN)
+plot(dd$IUCN)
+
 ```
 
 ```{r}
@@ -187,7 +217,6 @@ final_data %>%
   ylab("log10(mean prob cooccur)")
 
 ```
-
 
 ### correlation plot of potential predictors
 

@@ -114,7 +114,7 @@ vars <-
       ),
     # SQL queries
     sql_query_grid =
-      "SELECT * FROM \"MOBI_geometry\" WHERE \"datasetID\" IN (5,6,13,26)",
+      "SELECT * FROM \"MOBI_vw_FINAL_site_metrics\" WHERE \"datasetID\" IN (5,6,13,26)",
     sql_query_data =
       "SELECT
   \"datasetID\", \"scalingID\", \"siteID\", \"startYear\",

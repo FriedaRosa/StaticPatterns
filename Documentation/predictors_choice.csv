@@ -1,0 +1,76 @@
+category;role;name_clean;name_verbatim;class;factor.top_counts;n_levels;levels;Notes;Expected influence on the model
+Response;outcome;Jaccard dissimilarity;Jaccard_dissim;numeric;;;;;
+;outcome;log ratio AOO;log_R2_1;numeric;;;;;
+;outcome;ratio AOO;ratio_R2_1;numeric;;;;;
+Hypothesis 4;Atlas characteristics;dataset ID;datasetID;factor;26: 413, 6: 233, 13: 209, 5: 203;4;;;distinguishes between datapoints from different study regions
+;Atlas characteristics;total number of cell sampled;Total_Ncells_samp;numeric;;;;;total potential for change-indicator
+;Atlas characteristics;atlas centroid longitude;atlas_xhalf;numeric;;;;;
+;Atlas characteristics;atlas centroid latitude;atlas_yhalf;numeric;;;;;
+;Atlas characteristics;atlas length of the minimum rotated bounding rectangle;atlas_lengthMinRect;numeric;;;;;
+;Atlas characteristics;atlas width of the minimum rotated bounding rectangle;atlas_widthMinRect;numeric;;;;;
+;Atlas characteristics;atlas elongation of the minimum rotated bounding rectangle;atlas_elonMinRect;numeric;;;;;if the study region is already very elongated, species ranges will follow this shape if they are cosmopolitain 
+;Atlas characteristics;atlas normalized circularity;atlas_circNorm;numeric;;;;;if the study region is very circular, ranges will also be very circlar for species that are cosmopolitain
+;Atlas characteristics;atlas bearing;atlas_bearing;numeric;;;;;
+Hypothesis 3;Diversity;mean species alpha diversity;AlphaSR_sp;numeric;;;;;
+;Diversity;mean species beta diversity;BetaSR_sp;numeric;;;;;
+;Diversity;total species richness of studyregion;GammaSR;numeric;;;;;
+Hypothesis 2;Range Geometry;Area of occupancy (cropped);AOO;numeric;;;;;
+;Range Geometry;prevalence ;rel_occ_Ncells;numeric;;;;;expected to be a relevant interaction variable with others: e.g., morans I, mean log lacunarity or to adjust the magnitude of Jaccard since they are strongly correlated
+;Range Geometry;fractal dimension;D_AOO_a;numeric;;;;;gives information how evenly sprea the species is across the area
+;Range Geometry;Morans I;morans_I;numeric;;;;;spatial autocorrelation at the first distance class for queen conformation 
+;Range Geometry;Difference in Join count expected vs. Observed;joincount_delta;numeric;;;;;difference between the expected number of joins of cells in which a species is present based on prevalence and the observed number of joins. Indicates whether the species is clustered or overdispersed in space on average ?
+;Range Geometry;normalized circularity;circNorm;numeric;;;;;
+;Range Geometry;distance from centroid to atlas center of gravity;Dist_centroid_to_COG;numeric;;;;;
+;Range Geometry;min distance to the atlas border from range centroid;minDist_toBorder_centr;numeric;;;;;
+;Range Geometry;max distance to the atlas border from range centroid;maxDist_toBorder_centr;numeric;;;;;
+;Range Geometry;min distance between range border and atlas border;minDist_toBorder_border;numeric;;;;;
+;Range Geometry;range centroid longitude;range_centr_long;numeric;;;;;
+;Range Geometry;range centroid latitude;range_centr_lat;numeric;;;;;
+;Range Geometry;how southern the range is inside the stud<y area (from 0 -1 );southerness;numeric;;;;;
+;Range Geometry;how western the range is inside the study area (from 0 -1 );westernnes;numeric;;;;;
+;Range Geometry;relative m aximum distance in the range to maximum distance of atlas;rel_maxDist;numeric;;;;;
+;Range Geometry;relative east-west distance in the range to east-west distance of atlas;rel_ewDist;numeric;;;;;
+;Range Geometry;relative north-south distance in the range to north-south distance of atlas;rel_nsDist;numeric;;;;;
+;Range Geometry;relative elongation of the range to the elongation of the atlas;rel_elonRatio;numeric;;;;;
+;Range Geometry;relative normalized circularity of the range to the normalized circularity of the atlas;rel_circNorm;numeric;;;;;
+;Range Geometry;mean log lacunarity across scales;mean_lnLac;numeric;;;;;
+Hypothesis 1;Species Traits;Habitat type;Habitat;factor;For: 286, Wet: 242, Gra: 124, Woo: 107;11;Coastal, Desert, Forest, Grassland, Human Modified, Marine, Riverine, rock, Shrubland, Wetland, Woodland;*check factor = NA;
+;Species Traits;Migration type;Migration;factor;3: 563, 2: 247, 1: 237, NA: 0;3;1,2,3;*check factor = NA;
+;Species Traits;Tropic Level;Trophic.Level;factor;Car: 681, Omn: 198, Her: 164, Sca: 4;4;Carnivore, Omnivore, Herbivore, Scavenger;*check factor = NA;
+;Species Traits;Trophic Niche;Trophic.Niche;factor;Inv: 391, Aqu: 244, Omn: 187, Ver: 83;10;Verticore, Invertivore, Aquatic predator, Omnivore, Herbivore aquatic, Herbivore terrestrial, Granivore, Nectarivore, Frugivore, Scavanger;*check factor = NA;
+;Species Traits;Primary Lifestyle;Primary.Lifestyle;factor;Ins: 360, Ter: 319, Gen: 136, Aer: 124;5;Generalist, Insessorial, Terrestrial, Aquatic, Aerial;*check factor = NA;
+;Species Traits;Beak Width;Beak.Width;numeric;;;;;
+;Species Traits;Hand Wing Index;HWI;numeric;;;;;
+;Species Traits;Body mass;Mass;numeric;;;;;
+;Species Traits;Habitat density;Habitat.Density;factor;3: 550, 1: 278, 2: 219;3;1,2,3;;
+;Species Traits;Phylogenetic distinctiveness;pd;numeric;;;;;
+;Species Traits;Global climate niche breadth PC1;PC1_sd;numeric;;;;;
+;Species Traits;Global climate niche breadth PC2;PC2_sd;numeric;;;;;
+;Species Traits;Global range size;GlobRangeSize_km2;numeric;;;;;
+;Species Traits;IUCN Threat status;IUCN;factor;LC: 946, NT: 40, DD: 32, VU: 31;6;CR, DD, EN, LC, NT, VU;;
+;Species Traits;species mean probability to co-occurr with every other species;mean_prob_cooccur;numeric;;;;;
+Excluded;drop;;samplingPeriodID;factor;1: 1058, 2: 0;2;;;
+Excluded;drop;;Total_area_samp;numeric;;;;;
+Excluded;drop;;Total_Ncells;numeric;;;;;
+Excluded;drop;;occ_Ncells;numeric;;;;;
+Excluded;drop;;rel_AOO;numeric;;;;;
+Excluded;drop;;presence_n;numeric;;;;;
+Excluded;drop;;morans_I_p;numeric;;;;;
+Excluded;drop;;joincount_statistic;numeric;;;;;
+Excluded;drop;;joincount_expectation;numeric;;;;;
+Excluded;drop;;joincount_variance;numeric;;;;;
+Excluded;drop;;joincount_p_val;numeric;;;;;
+Excluded;drop;;joincount_zscore;numeric;;;;;
+Excluded;drop;;circ;numeric;;;;;
+Excluded;drop;;atlas_xmin;numeric;;;;;
+Excluded;drop;;atlas_xmax;numeric;;;;;
+Excluded;drop;;atlas_ymin;numeric;;;;;
+Excluded;drop;;atlas_ymax;numeric;;;;;
+Excluded;drop;;atlas_circ;numeric;;;;;
+Excluded;drop;;atlas_relCirc;numeric;;;;;
+Excluded;drop;;atlas_bearingMinRect;numeric;;;;;
+Excluded;drop;;rel_lin;numeric;;;;;
+Excluded;drop;;verbatimIdentification;character;;;;;
+Excluded;drop;;scientificName;character;;;;;
+Excluded;drop;;Family;character;;;;;
+Excluded;drop;;Order;character;;;;;

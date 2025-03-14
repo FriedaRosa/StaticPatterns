@@ -222,8 +222,6 @@ crs(masked_templates[[1]]) == my_crs
 
 
 
-
-
 # Convert each group to raster and calculate lacunarity
 masked_rasters <- list()
 res_list <- list()
