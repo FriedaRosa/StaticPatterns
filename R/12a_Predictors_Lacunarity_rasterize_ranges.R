@@ -45,10 +45,10 @@ all_sf <- readRDS("Data/output/1_data/1_data_sf.rds") %>%
 
 
 # Start Loop for rasterizing sf objects :
-
+## Note: to not overflow the memory, set data_id manually and skip the outer loop
 for (data_id in unique(all_sf$datasetID)){
 print(data_id)
-data_id <- 26
+data_id <- 6
 #----------------------------------------------------------#
 # Load and Filter Data -----
 #----------------------------------------------------------#
@@ -112,7 +112,9 @@ resolutions <- calculate_resolution(sf_grid)
 # Create masked raster templates
 template_list <- lapply(resolutions, function(res) {
   bbox <- res$bbox
-  rast(ext(bbox$xmin, bbox$xmax, bbox$ymin, bbox$ymax), resolution = res$resolution, crs = st_crs(sf_grid)$wkt)
+  rast(ext(bbox$xmin, bbox$xmax, bbox$ymin, bbox$ymax),
+       resolution = res$resolution,
+       crs = st_crs(sf_grid)$wkt)
 })
 
 masked_templates <- lapply(seq_along(template_list), function(i) {
@@ -168,152 +170,152 @@ map2(
 )
 }
 
-
-#----------------------------------------------------------#
-# Load rasters -----
-#----------------------------------------------------------#
-
-
-#----------------------------------------------------------#
-files <- list.files(pattern = "5_",
-                    here("Data/input/species_ranges_tiff/"),
-                    full.names = T)
-ranges_cz <- rast(files)
-names(ranges_cz) <- gsub(pattern = ".tif", "", basename(files))
-# plot(ranges_cz[[1]])
-# ranges_cz[[1]] %>% as.matrix(wide =T)
-#----------------------------------------------------------#
-files <- list.files(pattern = "^6_",
-                    path = here("Data/input/species_ranges_tiff/"),
-                    full.names = TRUE)
-ranges_ny <- rast(files)
-names(ranges_ny) <- gsub(pattern = ".tif", "", basename(files))
-plot(ranges_ny[[1]])
-
-#----------------------------------------------------------#
-files <- list.files(pattern = "13_",
-                    here("Data/input/species_ranges_tiff/"),
-                    full.names = T)
-ranges_jp <- rast(files)
-names(ranges_jp) <- gsub(pattern = ".tif", "", basename(files))
-plot(ranges_jp[[1]])
-#----------------------------------------------------------#
-files <- list.files(pattern = "26_",
-                    here("Data/input/species_ranges_tiff/"),
-                    full.names = T)
-ranges_eu <- rast(files)
-names(ranges_eu) <- gsub(pattern = ".tif", "", basename(files))
-plot(ranges_eu[[1]])
-
-#----------------------------------------------------------#
-ranges_list <- list(ranges_cz, ranges_ny, ranges_jp, ranges_eu)
-#----------------------------------------------------------#
-
-source(here("anxiliary_code/fun_lacunarity_matrix.R"))
-
-#----------------------------------------------------------#
-# Example use: lacunarty_R() -------
-#----------------------------------------------------------#
-
-r_vec <- c(3, 5, 9, 17, 33, 65)
-
-## parallel:
-library(terra)
-library(furrr)
-library(tictoc)
-
-plan(sequential)
-# Set up parallel processing with increased memory limit
-options(future.globals.maxSize = 3 * 1024^3)  # 3 GB limit
-plan(multisession, workers = 4)
-
-
-
-# Try with loop through datasets for automatization
-
-list_lac_res <- replicate(4, list())
-
-for (data_id in seq_along(ranges_list)){
-  print(data_id)
-
-  current_data <- ranges_list[[data_id]]
-  ranges_list <- as.list(current_data)
-  ranges_matrices <- map(ranges_list, ~ as.matrix(.x, wide = TRUE))
-
-  species_names <- names(current_data)
-
-  # **Run Parallel Lacunarity Computation**
-  tic("Parallel Lacunarity Computation")
-  res_list <- future_map2(
-    ranges_matrices, species_names,  # Pass one matrix & name at a time
-    ~ {
-      # Run lacunarity function on the matrix
-      res <- lacunarity_R(.x, r_vec, r_max, progress = FALSE, ncores = 1L, save_plot = FALSE, plot = FALSE)
-
-      # Add species name as a column
-      res <- res %>%
-        mutate(name = .y)
-
-      return(res)
-    },
-    .progress = FALSE  # Show progress bar
-  )
-  toc()
-
-  # Assign names properly
-  names(res_list) <- species_names  # Preserve original names of raster layers
-
-  # bind to dataframe
-  data_lacunarity <- res_list %>% bind_rows()
-
-  list_lac_res[[data_id]] <- data_lacunarity
-
-}
-
-
-### Without loop: example for CZ
-
-# **Convert Each Layer to a Matrix Before Parallel Processing**
-ranges_cz_list <- as.list(ranges_cz)  # Converts multi-layer SpatRaster to list of single-layer SpatRasters
-ranges_cz_matrices <- map(ranges_cz_list, ~ as.matrix(.x, wide = TRUE))  # Convert each layer to matrix
-
-#plan(sequential)
-
-# **Prepare Data for Parallel Execution**
-species_names <- names(ranges_cz)  # Extract species names
-
-# **Run Parallel Lacunarity Computation**
-tic("Parallel Lacunarity Computation")
-res_list <- future_map2(
-  ranges_cz_matrices, species_names,  # Pass one matrix & name at a time
-  ~ {
-    # Run lacunarity function on the matrix
-    res <- lacunarity_R(.x, r_vec, r_max, progress = FALSE, ncores = 1L, save_plot = FALSE, plot = FALSE)
-
-    # Add species name as a column
-    res <- res %>%
-      mutate(name = .y)
-
-    return(res)
-  },
-  .progress = TRUE  # Show progress bar
-)
-toc()
-
-# close parallel session
-plan(sequential)
-
-# Print summary
-print(res_list)
-
-
-# Assign names properly
-names(res_list) <- names(ranges_cz)  # Preserve original names of raster layers
-
-data_lacunarity <- res_list %>% bind_rows()
-# Print summary
-print(data_lacunarity)
-
-saveRDS(data_lacunarity, here("Data/output/1_data/3_lacunarity_CZ.rds"))
-
-#----------------------------------------------------------#
+#
+# #----------------------------------------------------------#
+# # Load rasters -----
+# #----------------------------------------------------------#
+#
+#
+# #----------------------------------------------------------#
+# files <- list.files(pattern = "5_",
+#                     here("Data/input/species_ranges_tiff/"),
+#                     full.names = T)
+# ranges_cz <- rast(files)
+# names(ranges_cz) <- gsub(pattern = ".tif", "", basename(files))
+# # plot(ranges_cz[[1]])
+# # ranges_cz[[1]] %>% as.matrix(wide =T)
+# #----------------------------------------------------------#
+# files <- list.files(pattern = "^6_",
+#                     path = here("Data/input/species_ranges_tiff/"),
+#                     full.names = TRUE)
+# ranges_ny <- rast(files)
+# names(ranges_ny) <- gsub(pattern = ".tif", "", basename(files))
+# plot(ranges_ny[[1]])
+#
+# #----------------------------------------------------------#
+# files <- list.files(pattern = "13_",
+#                     here("Data/input/species_ranges_tiff/"),
+#                     full.names = T)
+# ranges_jp <- rast(files)
+# names(ranges_jp) <- gsub(pattern = ".tif", "", basename(files))
+# plot(ranges_jp[[1]])
+# #----------------------------------------------------------#
+# files <- list.files(pattern = "26_",
+#                     here("Data/input/species_ranges_tiff/"),
+#                     full.names = T)
+# ranges_eu <- rast(files)
+# names(ranges_eu) <- gsub(pattern = ".tif", "", basename(files))
+# plot(ranges_eu[[1]])
+#
+# #----------------------------------------------------------#
+# ranges_list <- list(ranges_cz, ranges_ny, ranges_jp, ranges_eu)
+# #----------------------------------------------------------#
+#
+# source(here("anxiliary_code/fun_lacunarity_matrix.R"))
+#
+# #----------------------------------------------------------#
+# # Example use: lacunarty_R() -------
+# #----------------------------------------------------------#
+#
+# r_vec <- c(3, 5, 9, 17, 33, 65)
+#
+# ## parallel:
+# library(terra)
+# library(furrr)
+# library(tictoc)
+#
+# plan(sequential)
+# # Set up parallel processing with increased memory limit
+# options(future.globals.maxSize = 3 * 1024^3)  # 3 GB limit
+# plan(multisession, workers = 4)
+#
+#
+#
+# # Try with loop through datasets for automatization
+#
+# list_lac_res <- replicate(4, list())
+#
+# for (data_id in seq_along(ranges_list)){
+#   print(data_id)
+#
+#   current_data <- ranges_list[[data_id]]
+#   ranges_list <- as.list(current_data)
+#   ranges_matrices <- map(ranges_list, ~ as.matrix(.x, wide = TRUE))
+#
+#   species_names <- names(current_data)
+#
+#   # **Run Parallel Lacunarity Computation**
+#   tic("Parallel Lacunarity Computation")
+#   res_list <- future_map2(
+#     ranges_matrices, species_names,  # Pass one matrix & name at a time
+#     ~ {
+#       # Run lacunarity function on the matrix
+#       res <- lacunarity_R(.x, r_vec, r_max, progress = FALSE, ncores = 1L, save_plot = FALSE, plot = FALSE)
+#
+#       # Add species name as a column
+#       res <- res %>%
+#         mutate(name = .y)
+#
+#       return(res)
+#     },
+#     .progress = FALSE  # Show progress bar
+#   )
+#   toc()
+#
+#   # Assign names properly
+#   names(res_list) <- species_names  # Preserve original names of raster layers
+#
+#   # bind to dataframe
+#   data_lacunarity <- res_list %>% bind_rows()
+#
+#   list_lac_res[[data_id]] <- data_lacunarity
+#
+# }
+#
+#
+# ### Without loop: example for CZ
+#
+# # **Convert Each Layer to a Matrix Before Parallel Processing**
+# ranges_cz_list <- as.list(ranges_cz)  # Converts multi-layer SpatRaster to list of single-layer SpatRasters
+# ranges_cz_matrices <- map(ranges_cz_list, ~ as.matrix(.x, wide = TRUE))  # Convert each layer to matrix
+#
+# #plan(sequential)
+#
+# # **Prepare Data for Parallel Execution**
+# species_names <- names(ranges_cz)  # Extract species names
+#
+# # **Run Parallel Lacunarity Computation**
+# tic("Parallel Lacunarity Computation")
+# res_list <- future_map2(
+#   ranges_cz_matrices, species_names,  # Pass one matrix & name at a time
+#   ~ {
+#     # Run lacunarity function on the matrix
+#     res <- lacunarity_R(.x, r_vec, r_max, progress = FALSE, ncores = 1L, save_plot = FALSE, plot = FALSE)
+#
+#     # Add species name as a column
+#     res <- res %>%
+#       mutate(name = .y)
+#
+#     return(res)
+#   },
+#   .progress = TRUE  # Show progress bar
+# )
+# toc()
+#
+# # close parallel session
+# plan(sequential)
+#
+# # Print summary
+# print(res_list)
+#
+#
+# # Assign names properly
+# names(res_list) <- names(ranges_cz)  # Preserve original names of raster layers
+#
+# data_lacunarity <- res_list %>% bind_rows()
+# # Print summary
+# print(data_lacunarity)
+#
+# saveRDS(data_lacunarity, here("Data/output/1_data/3_lacunarity_CZ.rds"))
+#
+# #----------------------------------------------------------#
