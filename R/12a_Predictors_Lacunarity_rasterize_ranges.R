@@ -33,6 +33,7 @@ sf_use_s2(FALSE) # not lat long data
 calculate_resolution <- function(sf_obj) {
   sf_obj %>%
     st_make_valid() %>%
+    st_cast("MULTIPOLYGON") %>%
     group_split(datasetID) %>%
     map(~ {
       bbox <- st_bbox(.x)
@@ -96,7 +97,7 @@ grid_sf_all <-
 # data_id <- 6; data_nr <- 2
 # data_id <- 5; data_nr <- 1
 # data_id <- 13; data_nr <- 3
-# data_id <- 26; data_nr <- 4
+data_id <- 26; data_nr <- 4
 
 #----------------------------------------------------------#
 # Filter Data for one dataset -----
@@ -107,8 +108,9 @@ for (data_id in unique(all_sf$datasetID)){
       if (data_id == 13) data_nr <- 3 else
         if (data_id == 26) data_nr <- 4 else
           stop("data_id not found")
+  if(data_id == 26) sf_use_s2(FALSE)
 
-# Filter spatial data to dataset
+  # Filter spatial data to dataset
 data_sf <-
   all_sf %>%
   filter(datasetID == data_id) %>%
