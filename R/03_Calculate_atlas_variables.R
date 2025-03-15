@@ -97,8 +97,10 @@ jaccard <- function(set1, set2) {
   a <- length(intersect(set1, set2))
   b <- length(setdiff(set2, set1))
   c <- length(setdiff(set1, set2))
-  return(list(jaccard_index = a / (a + b + c), a = a, b = b, c = c))
+  n_union  <- length(union(set1,set2))
+  return(list(jaccard_index = a / (a + b + c), a = a, b = b, c = c, n_union = n_union))
 }
+
 
 #----------------------------------------------------------#
 
@@ -114,10 +116,12 @@ Jaccard_df <- pres_dat_final %>%
     ))
   ) %>%
   unnest_wider(jaccard_results) %>%
+  group_by(verbatimIdentification, datasetID) %>%
+  mutate(d = Total_Ncells_samp - n_union) %>%
   rename(Jaccard_sim = jaccard_index) %>%
   mutate(Jaccard_dissim = 1 - Jaccard_sim) %>%
   ungroup() %>%
-  distinct(datasetID, verbatimIdentification, Jaccard_dissim, Jaccard_sim, a, b, c)
+  distinct(datasetID, verbatimIdentification, Jaccard_dissim, Jaccard_sim, a, b, c, d, Total_Ncells_samp)
 
 # Save jaccard results
 write.csv(Jaccard_df, paste0(vars$Documentation, "Jaccard_df.csv"))
@@ -280,7 +284,7 @@ species_data_new <- calculate_OAR(species_data) %>%
         datasetID, verbatimIdentification, samplingPeriodID,
         Total_area_samp, Total_Ncells, Total_Ncells_samp,
         AOO, occ_Ncells, rel_occ_Ncells, rel_AOO,
-        Jaccard_dissim, D_AOO_a
+        Jaccard_dissim, a,b,c,d, D_AOO_a
       ) %>%
       distinct(datasetID, samplingPeriodID, verbatimIdentification,
                .keep_all = TRUE)
