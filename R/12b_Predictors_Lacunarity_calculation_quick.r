@@ -8,7 +8,7 @@ source(here::here("R/00_Configuration.R"))
 
 
 
-source(here("R/src/fun_lacunarity_matrix.R"))
+source(here::here("R/src/fun_lacunarity_matrix.R"))
 
 # Load required packages
 list_p <- c("here", "sf", "tidyverse", "purrr", "furrr", "tictoc", "terra")
