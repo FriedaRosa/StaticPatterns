@@ -17,7 +17,7 @@ max_iterations_R <- function(w_vec, mode, mat_width, mat_height) {
 }
 
 # Helper: internal_lacunarity_box_masses -------------------------------
-internal_lacunarity_box_masses <- function(box_masses, fun = 1, N_r) {
+internal_lacunarity_box_masses <- function(box_masses, fun, N_r) {
   if (length(box_masses) <= 1) return(NA_real_)
 
   if (fun == 1) {
@@ -50,19 +50,26 @@ internal_lacunarity_box_masses <- function(box_masses, fun = 1, N_r) {
   lac
 }
 
-rcpp_lacunarity_R <- function(mat, w_vec, fun, mode) {
+# Optimized rcpp_lacunarity_R (Corrected Matrix-Based Computation) -----
+rcpp_lacunarity_R <- function(mat, w_vec, fun, mode, display_progress = FALSE) {
   mat_height <- nrow(mat)
   mat_width  <- ncol(mat)
   out <- numeric(length(w_vec))
 
-  # Identify all valid (non-NaN) positions
-  non_na_mask <- !is.na(mat)
+  if (display_progress) {
+    total_iters <- max_iterations_R(w_vec, mode, mat_width, mat_height)
+    message("Total iterations (approx): ", total_iters)
+  }
 
   for (j in seq_along(w_vec)) {
-    r <- w_vec[j]
-    message(paste0("Processing r = ", r))
+    w <- w_vec[j]
+    r <- if (mode == 1) w else (w - 1) %/% 2
 
-    N_r <- (mat_width - r + 1) * (mat_height - r + 1)
+    N_r <- if (mode == 1) {
+      (mat_width - r + 1) * (mat_height - r + 1)
+    } else {
+      (mat_width - 2 * r) * (mat_height - 2 * r)
+    }
 
     if (N_r <= 0) {
       out[j] <- NA_real_
@@ -72,24 +79,20 @@ rcpp_lacunarity_R <- function(mat, w_vec, fun, mode) {
     box_masses <- numeric(N_r)
     counter <- 1
 
-    # Iterate only over valid starting positions where a full r x r window contains no NA
     for (x in 1:(mat_height - r + 1)) {
       for (y in 1:(mat_width - r + 1)) {
-        # Check if the entire window contains only valid (non-NaN) values
-        if (all(non_na_mask[x:(x + r - 1), y:(y + r - 1)])) {
-          window <- mat[x:(x + r - 1), y:(y + r - 1), drop = FALSE]
-          box_masses[counter] <- sum(window)
-          counter <- counter + 1
+        window <- mat[x:(x + r - 1), y:(y + r - 1), drop = FALSE]
+        #print(window)
+        if (any(!is.na(window))) {
+          box_masses[counter] <- if (fun == 1) sum(window, na.rm = TRUE) else max(window, na.rm = TRUE) - min(window, na.rm = TRUE)
+        } else {
+          box_masses[counter] <- NA_real_
         }
+        counter <- counter + 1
       }
     }
 
-    # Compute lacunarity only on valid box masses
-    if (counter > 1) {
-      out[j] <- internal_lacunarity_box_masses(box_masses[1:(counter - 1)], N_r)
-    } else {
-      out[j] <- NA_real_  # If no valid windows were found
-    }
+    out[j] <- internal_lacunarity_box_masses(box_masses, fun, N_r)
   }
 
   out
@@ -105,22 +108,52 @@ lacunarity_R <- function(x, r_vec = NULL, r_max = NULL,
 
   sp_name <- names(x)
 
-  print(paste0("is matrix?", is.matrix(x)))
+  # **1. If `x` is already a list of matrices, use it directly**
+  if (inherits(x, "list") && all(sapply(x, function(el) inherits(el, "matrix")))) {
+    # No conversion needed
+  }
+
+  # **2. If `x` is a single matrix, wrap it in a list**
+  else if (inherits(x, "matrix")) {
+    x <- list(x)  # Ensure consistent format
+  }
+
+  # **3. Convert SpatRaster objects to matrices**
+  else if (inherits(x, "list") && all(sapply(x, inherits, "SpatRaster"))) {
+    x <- lapply(x, function(r) as.matrix(r, wide = TRUE))
+  }
+
+  else if (inherits(x, "SpatRaster")) {
+    x <- list(as.matrix(x, wide = TRUE))  # Convert single SpatRaster to a list containing one matrix
+  }
+
+  # **4. If input is a folder path, read raster files and convert to matrices**
+  else if (is.character(x)) {
+    r_paths <- list.files(x, pattern = "\\.tif$", full.names = TRUE)
+    if (length(r_paths) == 0) stop("No .tif files found.")
+    x <- lapply(r_paths, function(f) as.matrix(terra::rast(f), wide = TRUE))
+  }
+
+  else {
+    stop("x must be a list of matrices, a single matrix, a SpatRaster, a list of SpatRasters, or a folder path.")
+  }
 
   # **Continue with normal processing**
   out <- dplyr::tibble(name = character(), i = integer(), r = integer(),
                        "ln(r)" = numeric(), Lac = numeric(), "ln(Lac)" = numeric())
 
-    mat <- x
-    ras_name <- if (!is.null(sp_name)) sp_name else paste0("Raster")
+  for (i in seq_along(x)) {
+    mat <- x[[i]]
+    ras_name <- if (!is.null(sp_name)) sp_name[i] else paste0("Raster_", i)
 
-    lac_fun <- 1L
-    lac_vals <- rcpp_lacunarity_R(mat, r_vec, lac_fun, mode = 1)
+    lac_fun <- if (length(unique(mat)) <= 2) 1L else 2L
+    lac_vals <- rcpp_lacunarity_R(mat, r_vec, lac_fun, mode = 1, display_progress = FALSE)
 
     this_out <- dplyr::tibble(name = rep(ras_name, length(lac_vals)),
-                              r = r_vec, "ln(r)" = log(r_vec),
+                              i = i, r = r_vec, "ln(r)" = log(r_vec),
                               Lac = lac_vals, "ln(Lac)" = log(lac_vals))
     out <- dplyr::bind_rows(out, this_out)
+  }
 
   dplyr::arrange(out, i)
 }
