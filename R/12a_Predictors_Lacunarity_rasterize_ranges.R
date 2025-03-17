@@ -31,6 +31,7 @@ sf_use_s2(FALSE) # not lat long data
 #----------------------------------------------------------#
 
 calculate_resolution <- function(sf_obj) {
+  datasetID <- sf_obj$datasetID %>% unique()
   sf_obj %>%
     st_make_valid() %>%
     st_cast("MULTIPOLYGON") %>%
@@ -39,10 +40,10 @@ calculate_resolution <- function(sf_obj) {
       bbox <- st_bbox(.x)
       list(
         datasetID = unique(.x$datasetID),
-        resolution = c(
-          abs(bbox$xmax - bbox$xmin) / (length(unique(st_coordinates(.x)[, 1])) - 1),
-          abs(bbox$ymax - bbox$ymin) / (length(unique(st_coordinates(.x)[, 2])) - 1)
-        ),
+        resolution = case_when(datasetID == 5 ~ c(10000,10000),
+                               datasetID == 6 ~ c(5000,5000),
+                               datasetID == 13 ~ c(20000,20000),
+                               datasetID == 26 ~ c(50000,50000)),
         bbox = bbox
       )
     })
@@ -69,7 +70,7 @@ save_raster <- function(sampling_period, species_name) {
 
   # **Rasterize**
   # #, datatype = "INT1U" --> save as integer to save memory
-  r <- rasterize(current_sf, template_i, field = "presence", update = TRUE, datatype = "INT1U")
+  r <- rasterize(current_sf, template_i, field = "presence", update = TRUE)
 
   # **Save raster**
   writeRaster(r, filename = filename, overwrite = TRUE)
@@ -94,10 +95,10 @@ grid_sf_all <-
   filter(scalingID == 1)
 
 ## Note: to not overflow the memory, set data_id manually and skip the outer loop
-# data_id <- 6; data_nr <- 2
-# data_id <- 5; data_nr <- 1
-# data_id <- 13; data_nr <- 3
-data_id <- 26; data_nr <- 4
+# data_id <- 6; data_nr <- 2; resolution <- 5*5
+# data_id <- 5; data_nr <- 1; resolution <- 10*10
+# data_id <- 13; data_nr <- 3; resolution <- 20*20
+# data_id <- 26; data_nr <- 4; resolution <- 50*50
 
 #----------------------------------------------------------#
 # Filter Data for one dataset -----
@@ -196,6 +197,7 @@ rm(list = c("grid_sf", "data_sf", "resolutions", "template_list",
             "masked_templates", "unsampled_sites_expanded",
             "data_sf_with_unsampled", "species_list", "template_i", "output_dir"))
 gc()
+
 
 
 #----------------------------------------------------------#
