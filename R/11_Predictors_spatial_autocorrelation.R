@@ -16,7 +16,7 @@
 rm(list = ls())
 gc()
 
-
+library(here)
 #----------------------------------------------------------#
 # Install and load libraries -----
 #----------------------------------------------------------#
@@ -25,7 +25,7 @@ gc()
 source(here::here("R/00_Configuration.R"))
 
 # subset of packages to load to avoid conflicts:
-list_p <- c("here", "sf" ,"tidyverse", "purrr", "tictoc", "spdep")
+list_p <- c("here", "sf" ,"tidyverse", "purrr", "tictoc", "spdep", "rstatix", "furrr", "futures")
 lapply(list_p, require, character = TRUE)
 
 
@@ -58,6 +58,13 @@ library(sf)
 library(spdep)
 library(purrr)
 
+## Test:
+dataset_group <- atlas_sf %>%
+  group_by(datasetID) %>%
+  group_split() %>% .[[4]]
+
+
+
 process_dataset <- function(dataset_group) {
   dataset_id <- unique(dataset_group$datasetID)
 
@@ -73,7 +80,7 @@ process_dataset <- function(dataset_group) {
   safe_joincount_test <- possibly(function(x, nb) joincount.test(as.factor(x), nb2listw(nb, style = "B", zero.policy = TRUE)), otherwise = NA)
 
   # Process each sampling period
-  map_dfr(sampling_periods, function(sampling_period) {
+  res <- map_dfr(sampling_periods, function(sampling_period) {
 
     # Subset data for the time period
     tp_subset <- dataset_group %>% filter(samplingPeriodID == sampling_period)
@@ -82,7 +89,8 @@ process_dataset <- function(dataset_group) {
     sp_names <- tp_subset %>%
       st_drop_geometry() %>%
       distinct(verbatimIdentification) %>%
-      pull()
+      pull() %>%
+      unique()
 
     # Get all sites
     all_sites <- dataset_group %>% select(siteID, geometry) %>% unique()
@@ -90,7 +98,8 @@ process_dataset <- function(dataset_group) {
     # Process each species
     map_dfr(sp_names, function(sp_name) {
 
-      print(paste0("ID = ", dataset_id, ", TP = ", sampling_period, ", SP = ", sp_name))
+      message(paste0("ID = ", dataset_id, ", TP = ", sampling_period, ", SP = ", sp_name))
+      #print(paste0("ID = ", dataset_id, ", TP = ", sampling_period, ", SP = ", sp_name))
 
       # Filter for a single species and join with all sites
       sp_data <- tp_subset %>%
@@ -113,6 +122,9 @@ process_dataset <- function(dataset_group) {
       moran_res_q <- safe_moran_test(sp_data$presence, nb_q)
       jc_res_q <- safe_joincount_test(sp_data$presence, nb_q)
 
+      print(unique(paste0("n: ", num_pres,
+                   ", morans: ",  ifelse(is.na(moran_res_q), NA, moran_res_q$estimate[[1]]),
+                   ", joincount: ", unique(ifelse(is.na(jc_res_q), NA, jc_res_q[[2]]$estimate[1])[[1]]))))
       # Save results in a dataframe
       tibble(
         datasetID = dataset_id,
@@ -134,51 +146,83 @@ process_dataset <- function(dataset_group) {
                                      num_pres) -
                                     (jc_res_q[[2]]$estimate[2] /
                                        num_pres)))[[1]]
-      ) %>% unique()
-    }) # map_dfr for species
+      ) %>%
+        unique()
+
+      }) # map_dfr for species
   }) # map_dfr for sampling periods
+gc()
+return(res)
 }
 
 #----------------------------------------------------------#
 # Run the function  -----
 #----------------------------------------------------------#
-
-# Set up parallel processing
-plan(multisession, workers = 4)
+tictoc::tic()
+results_CZ <-
+  atlas_sf %>%
+  filter(datasetID == 5) %>%
+  process_dataset()
+tictoc::toc()
+#----------------------------------------------------------#
 
 tictoc::tic()
-results <- atlas_sf %>%
-  group_by(datasetID) %>%
-  group_split() %>%
-  future_map_dfr(process_dataset)
-tictoc::toc() # 664.76 sec elapsed
+results_NY <-
+  atlas_sf %>%
+  filter(datasetID == 6) %>%
+  process_dataset()
+tictoc::toc()
+#----------------------------------------------------------#
 
-plan(sequential)
+tictoc::tic()
+results_JP <-
+  atlas_sf %>%
+  filter(datasetID == 13) %>%
+  process_dataset()
+tictoc::toc()
+#----------------------------------------------------------#
 
+tictoc::tic()
+results_EU <-
+  atlas_sf %>%
+  filter(datasetID == 26) %>%
+  process_dataset()
+tictoc::toc()
+
+#----------------------------------------------------------#
+# Convert list to a single data frame ----
+#----------------------------------------------------------#
+
+results <-
+  bind_rows(
+  results_EU,
+  results_CZ,
+  results_JP,
+  results_NY)
 #----------------------------------------------------------#
 # save results to .rds -----
 #----------------------------------------------------------#
 saveRDS(results, here("Data/output/1_data/2_spatial_auto.rds"))
 
 
-
-results %>%
-  filter(is.na(morans_I_p)) %>%
-  print(n = 29) %>%
-  table()
-
-results %>%
-  group_by(datasetID, samplingPeriodID) %>%
-  filter(if_any(everything(), is.na)) %>%
-  get_summary_stats(type = "common") %>%
-  kableExtra::kable()
-
-
-results %>% filter(if_any(everything(), is.na)) %>%
-  group_by(datasetID, samplingPeriodID) %>%
-  summarise(n_sp = n_distinct(verbatimIdentification),
-            min_pres = min(presence_n),
-            max_pres = max(presence_n),
-            median_pres = median(presence_n)) %>%
-  flextable()
+#
+# results %>%
+#   filter(is.na(morans_I_p)) %>%
+#   print(n = 29) %>%
+#   table()
+#
+# results %>%
+#   group_by(datasetID, samplingPeriodID) %>%
+#   filter(if_any(everything(), is.na)) %>%
+#   get_summary_stats(type = "common") %>%
+#   kableExtra::kable()
+#
+#
+# results %>% filter(if_any(everything(), is.na)) %>%
+#   group_by(datasetID, samplingPeriodID) %>%
+#   summarise(n_sp = n_distinct(verbatimIdentification),
+#             min_pres = min(presence_n),
+#             max_pres = max(presence_n),
+#             median_pres = median(presence_n)) %>%
+#   flextable()
 
