@@ -16,3 +16,7 @@ tempCodeRunnerFile.r
 *.rds
 *.ini
 /figures/3_maps/
+*.svg
+*.png
+*.svg
+/figures
