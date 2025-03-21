@@ -15,3 +15,4 @@ tempCodeRunnerFile.r
 .Renviron
 *.rds
 *.ini
+/figures/3_maps/

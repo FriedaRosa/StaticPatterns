@@ -15,6 +15,7 @@
 rm(list=ls())  # Clear workspace
 library(terra)
 library(here)
+library(ggplot2)
 library(dplyr)
 
 #----------------------------------------------------------#
@@ -80,60 +81,34 @@ res_list <- list()
 for (file_i in seq_along(files)) {
   r <- rast(files[file_i])
   test_res <- apply_focal_multiple_w(r, w_vec)
+# add atlas and species info
+  name_string <- strsplit(test_res$name, "_")[[1]]
+  test_res$datasetID <- name_string[1]
+  test_res$samplingPeriodID <- name_string[2]
+  sp_name <- paste0(name_string[-c(1,2)], collapse = "_")
+  test_res$verbatimIdentification <- sp_name
+
   res_list[[file_i]] <- test_res
 }
 tictoc::toc()
 
-df_res <- do.call(rbind, res_list)
-
-saveRDS(df_res, here("Data/output/1_data/3_lacunarity_terra_focal.rds"))
-df_res <- readRDS(here("Data/output/1_data/3_lacunarity_terra_focal.rds"))
+df_res <- do.call(rbind, res_list) %>%
+  mutate(verbatimIdentification = gsub("_", " ", verbatimIdentification))
 
 
+df_res <- df_res %>%
+  mutate(verbatimIdentification =
+           case_when(
+             verbatimIdentification == "Anas platyrhynchos x A  rubripes" ~ "Anas platyrhynchos x A. rubripes",
+             verbatimIdentification == "Vermivora chrysoptera x V  pinus" ~ "Vermivora chrysoptera x V. pinus",
+             verbatimIdentification == "Columba livia f  domestica" ~ "Columba livia f. domestica",
+             verbatimIdentification == "Vermivora pinus x V  chrysoptera" ~ "Vermivora pinus x V. chrysoptera",
+             .default = verbatimIdentification
+           ))
 
-df_res2 <- df_res %>%
-  group_by(name) %>%
-  mutate(datasetID = as.factor(strsplit(name, "_")[[1]][1]),
-         samplingPeriodID = as.factor(strsplit(name, "_")[[1]][2]),
-         verbatimIdentification = paste0(strsplit(name, "_")[[1]][3], "_", strsplit(name, "_")[[1]][4]))
-
-
-ggplot(df_res2, aes(y = Lac, x = r, col = verbatimIdentification))+
-  geom_line(aes(group = name), alpha = 0.4, show.legend = FALSE)+
-  scale_y_log10()+
-  scale_x_log10()+
-  facet_wrap(~datasetID)
+saveRDS(df_res, here("Data/output/1_data/single_predictors/2_lacunarity_terra_focal.rds"))
 
 
 
 
 
-library(ggplot2)
-library(dplyr)
-library(terra)
-
-
-
-
-
-# Help: https://r.geocompx.org/spatial-operations
-
-w <- matrix(1, nrow = 3, ncol = 3)
-r <- rast(files[1])
-f <- focal(r, w = w, fun = "sum", na.rm = T, na.policy = "omit", expand = TRUE, fillvalue = NaN)
-
-plot(r)
-plot(f)
-
-r_df <- as.data.frame(r, xy = TRUE)
-f_df <- as.data.frame(f, xy = TRUE)
-
-ggplot(r_df, aes(x=x, y=y, fill = as.integer(presence)))+
-  geom_tile(aes(fill = as.integer(presence)))+
-  scale_fill_viridis_c() +
-  theme_minimal()
-
-ggplot(f_df, aes(x=x, y=y, fill = as.integer(focal_sum)))+
-  geom_tile(aes(fill = (focal_sum)))+
-  scale_fill_viridis_c() +
-  theme_minimal()

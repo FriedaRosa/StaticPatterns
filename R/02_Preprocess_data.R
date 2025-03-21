@@ -19,6 +19,7 @@ gc()
 # Source 00_Configuration.R
 source(here::here("R/00_Configuration.R"))
 lapply(package_list, require, character = TRUE)
+sf_use_s2(TRUE)
 
 #----------------------------------------------------------#
 # Load data -----
@@ -27,289 +28,176 @@ lapply(package_list, require, character = TRUE)
 grids <-
   readRDS(vars$grid)
 
-data <-
-  readRDS(vars$data)
-
 data_sf <-
   readRDS(vars$data_sf)
 
-meta <-
-  read.csv(paste0(vars$Documentation, "METADATA_datasets.csv"))
-
 #----------------------------------------------------------#
-# 1. Data wrangling -----
+# 1. Spatial filter -----
 #----------------------------------------------------------#
 
+# get list of cells and sampling repeats
+# get list of species and filters (or whether to include them)
 
 #--------------------------------------------------#
 # 1.1. Cell-indicator for repeated sampling -----
 #--------------------------------------------------#
 
-data_sf2 <-
+cells <-
   data_sf %>%
+  st_drop_geometry() %>%
   group_by(datasetID, scalingID, siteID, samplingPeriodID) %>%
   mutate(cell_sampled = if_else(is.na(verbatimIdentification), 0, 1)) %>%
-  ungroup()
-
-#--------------------------------------------------#
-
-cells_rep <-
-  data_sf2 %>%
-  st_drop_geometry() %>%
-  distinct(datasetID, scalingID, siteID, samplingPeriodID, cell_sampled) %>%
-  group_by(datasetID, scalingID, siteID) %>%
+  ungroup() %>%
+  distinct(datasetID, scalingID, siteID, samplingPeriodID, cell_sampled, croppedArea) %>%
+  group_by(datasetID, scalingID, siteID, croppedArea) %>%
   dplyr::summarise(
-    cell_sampling_repeats = sum(cell_sampled), .groups = "keep"
-  )
-
-#--------------------------------------------------#
-
-# Merge indicators and clean data
-data_sf3 <-
-  data_sf2 %>%
-  left_join(cells_rep) %>%
-  select(
-    datasetID, scalingID, siteID,
-    cell_sampling_repeats, samplingPeriodID,
-    verbatimIdentification, scientificName,
-    centroidDecimalLongitude, centroidDecimalLatitude,
-    croppedArea) %>%
+    cell_sampling_repeats = n_distinct(samplingPeriodID, na.rm = TRUE),
+    .groups = "keep") %>%
+  mutate(cells_keep =
+           case_when(
+             cell_sampling_repeats == 2 & !is.na(croppedArea) ~ 1,
+             cell_sampling_repeats %in% c(0,1) | is.na(croppedArea) ~ 0,
+            .default = NA)) %>%
   unique()
 
-# Check numbers
-glimpse(data_sf3)
-
-# Drop geometry to get data:
-data <-
-  data_sf3 %>%
-  st_drop_geometry()
-
+# Checks:
+colSums(is.na(cells))
 
 #--------------------------------------------------#
-# 1.2. Native vs. Introduced -----
+# 2. Species filter:
 #--------------------------------------------------#
 
+species_df <-
+  data_sf %>%
+  st_drop_geometry() %>%
+  filter(scalingID == 1) %>%
+  distinct(datasetID, verbatimIdentification, scientificName, samplingPeriodID) %>%
+  filter(!is.na(verbatimIdentification))
+
+# Checks:
+colSums(is.na(species_df))
+
+#--------------------------------------------------#
+# 2.1 Under-sampled species from Japan  -----
+#--------------------------------------------------#
+
+jp_sp_remove <-
+  read.csv(here("Documentation/META_removed_sp_Japan_expert_knowledge.csv"),
+           header = FALSE,
+           strip.white = TRUE) %>%
+  pull(V1)
+#--------------------------------------------------#
+
+species_df2 <- species_df %>%
+  mutate(
+    sp_remove_expert =
+      case_when(
+        verbatimIdentification %in% jp_sp_remove & datasetID == 13 ~ 1,
+        TRUE ~ 0))
+
+#--------------------------------------------------#
+# 2.2. Native vs. Introduced -----
+#--------------------------------------------------#
 sf_use_s2(FALSE)
 
-# Load range maps for introduced species
-BirdLife_introduced <-
-  st_read(here("Data/input/shp_introduced/"))
-
-# Read and preprocess the data
+# Read grid shapefiles at largest resolution(1-cell-aggregations)
 countries <-
-  readRDS(here("Data/input/grid.rds")) %>%
-  filter((datasetID != 5 | scalingID == 64) & (!(datasetID %in% c(6, 13, 26)) | scalingID == 128)) %>%
+  grids %>%
+  group_by(datasetID) %>%
+  filter(scalingID == max(scalingID)) %>%
   select(datasetID, geometry) %>%
-  unique() %>%
-  st_make_valid()
-
-
-#--------------------------------------------------#
-
-# Handle datasetID == 6 separately
-countries_6 <-
-  countries %>%
-  filter(datasetID == 6) %>%
   summarize(
     geometry = st_union(geometry),
     .groups = "keep"
-  ) # Combine all geometries for datasetID == 6
-
-countries_6$datasetID <- 6
-
-# Handle all other datasetIDs
-countries_others <-
-  countries %>%
-  filter(datasetID != 6)
-
-# Combine back into a single object
-countries_final <-
-  bind_rows(countries_6, countries_others) %>%
+  ) %>%
   st_make_valid()
 
-#--------------------------------------------------#
+# Load range maps for introduced species
+BirdLife_introduced <-
+  st_read(here("Data/input/shp_introduced/")) %>%
+  st_transform(crs = st_crs(countries))
+
+# check if they are identical now:
+st_crs(countries) == st_crs(BirdLife_introduced)
 
 # Spatial join: Countries and introduced ranges
 introduced_sp <-
-  st_join(countries_final, BirdLife_introduced,
-          join = st_intersects)
-
-# Check numbers
-introduced_sp %>%
-  st_drop_geometry() %>%
-  group_by(datasetID) %>%
-  summarize(
-    n_sp = n_distinct(sci_name),
-    .groups = "keep")
-
-# Save list of introduced species to .csv for documentation
-introduced_sp %>%
-  st_drop_geometry() %>%
-  group_by(datasetID) %>%
-  write.csv(here("Documentation/introduced_species.csv"))
-
-#--------------------------------------------------#
-
-# Remove introduced species spatially:
-
-data_sf4 <- introduced_sp %>%
-  st_drop_geometry() %>%
-  select(datasetID, sci_name) %>%
+  st_join(countries, BirdLife_introduced,
+          join = st_intersects) %>%
   rename("scientificName" = "sci_name") %>%
-  unique() %>%
   mutate(introduced = 1) %>%
-  right_join(data_sf3) %>%
-  mutate(
-    introduced = case_when(is.na(introduced) ~ 0, .default = introduced)) %>%
-  filter(introduced == 0) # remove them
-
-#--------------------------------------------------#
-
-# Save list of removed species:
-
-introduced_sp %>%
   st_drop_geometry() %>%
-  select(datasetID, sci_name) %>%
-  rename("scientificName" = "sci_name") %>%
-  unique() %>%
-  mutate(introduced = 1) %>%
-  right_join(data_sf3) %>%
-  mutate(
-    introduced = case_when(is.na(introduced) ~ 0, .default = introduced)) %>%
-  filter(introduced == 1) %>%
-  st_drop_geometry() %>%
-  distinct(verbatimIdentification, datasetID) %>%
-  write.csv(paste0(vars$Documentation, "META_removed_introduced_sp.csv"))
-
-
-#--------------------------------------------------#
-# 1.3. Species lost or gained  -----
-#--------------------------------------------------#
-
-# Filter species data:
-
-all_sp_raw <-
-  data %>%
-  filter(scalingID == 1) %>%
-  distinct(datasetID, samplingPeriodID, verbatimIdentification) %>%
-  na.omit()
-
-
-# Get species lost or gained completely for each dataset:
-
-list_lost_gained_species <- lapply(vars$atlas_names, function(atlas) {
-
-  df <-
-    all_sp_raw %>%
-    filter(datasetID == atlas)
-
-  sp1 <-
-    df %>%
-    filter(samplingPeriodID == 1) %>%
-    pull(verbatimIdentification)
-
-  sp2 <-
-    df %>%
-    filter(samplingPeriodID == 2) %>%
-    pull(verbatimIdentification)
-
-  list(
-    lost = setdiff(sp1, sp2),
-    gained = setdiff(sp2, sp1))
-
-})
-
-names(list_lost_gained_species) <-
-  names(vars$atlas_names)
+  select(datasetID, scientificName, introduced) %>%
+  arrange(datasetID)
 
 #--------------------------------------------------#
 
-# Filter species sampled twice (in cells sampled twice)
+species_df3 <-
+  species_df2 %>%
+  left_join(introduced_sp) %>%
+  mutate(introduced = case_when(is.na(introduced) ~ 0,
+                                .default = introduced))
+
+
+#--------------------------------------------------#
+# 2.3. Species lost or gained  -----
+#--------------------------------------------------#
+
 common_sp <-
-  data %>%
-  filter(cell_sampling_repeats == 2, scalingID == 1) %>%
+  data_sf %>%
+  st_drop_geometry() %>%
+  filter(scalingID == 1) %>%
+  left_join(species_df3) %>%
+  left_join(cells %>% filter(scalingID == 1)) %>%
+  na.omit() %>%
+  filter(cells_keep == 1 & introduced == 0 & sp_remove_expert == 0) %>%
   group_by(datasetID, verbatimIdentification) %>%
-  dplyr::summarise(sp_sampling_repeats = n_distinct(samplingPeriodID), .groups = "drop")
+  dplyr::summarise(sp_sampling_repeats = n_distinct(samplingPeriodID),
+                   .groups = "drop")
 
-# those sampled only once
-excluded_sp <-
-  data %>%
-  filter(cell_sampling_repeats == 2, scalingID == 1) %>%
-  group_by(datasetID, verbatimIdentification) %>%
-  mutate(sp_sampling_repeats = n_distinct(samplingPeriodID)) %>%
-  filter(sp_sampling_repeats == 1) %>%
-  ungroup() %>%
-  select(datasetID, verbatimIdentification, samplingPeriodID, sp_sampling_repeats) %>%
-  unique()
 
-excluded_sp
+# checks
+common_sp %>%
+  group_by(datasetID, sp_sampling_repeats) %>%
+  dplyr::summarise(n_sp = n_distinct(verbatimIdentification),
+                   .groups = "keep")
 
 #--------------------------------------------------#
 
-
-# Summarize dropped species:
-excluded_sp %>%
-  group_by(datasetID, samplingPeriodID) %>%
-  summarise(n_sp = n_distinct(verbatimIdentification)) %>%
+species_df4 <-
+  species_df3 %>%
+  left_join(common_sp) %>%
   mutate(
-    lost = case_when(samplingPeriodID == 1 ~ n_sp),
-    gained = case_when(samplingPeriodID == 2 ~ n_sp)
-  ) %>%
-  group_by(datasetID) %>%
-  summarise(
-    lost = sum(lost, na.rm = TRUE),
-    gained = sum(gained, na.rm = TRUE),
-    .groups = "drop"
-  )
+    species_keep =
+      case_when(
+        sp_remove_expert == 0 & sp_sampling_repeats == 2 & introduced == 0 ~ 1,
+        TRUE ~ 0))
+
 
 
 #----------------------------------------------------------#
 # Apply data filters  -----
 #----------------------------------------------------------#
 
-presence_data_filt <-
-  data %>%
-  full_join(common_sp) %>%
-  filter(cell_sampling_repeats == 2, sp_sampling_repeats == 2) %>%
-  mutate(cell_sampling_repeats = as.factor(cell_sampling_repeats)) %>%
-  unique()
+data_sf2 <-
+  data_sf %>%
+  left_join(cells) %>%
+  left_join(species_df4)
 
-# final sf
-data_sf5 <-
-  data_sf4 %>%
-  left_join(common_sp)
+data_filt <-
+  data_sf2 %>%
+  st_drop_geometry() %>%
+  filter(!is.na(verbatimIdentification) & species_keep == 1 & cells_keep == 1)
 
-
-#----------------------------------------------------------#
-# Remove underrepresented species from Japan  -----
-#----------------------------------------------------------#
-jp_sp_remove <-
-  read.csv(here("Documentation/META_removed_sp_Japan_expert_knowledge.csv"),
-           header = FALSE,
-           strip.white = TRUE) %>%
-  pull(V1)
-
-jp_sp_remove <-
-  gsub("[\u00A0\\s]+$",
-       "",
-       jp_sp_remove,
-       perl = TRUE)
-
-presence_data_filt2 <-
-  presence_data_filt %>%
-  filter(
-    !c(verbatimIdentification %in% jp_sp_remove &
-         datasetID == 13))
-
-data_sf6 <-
-  data_sf5 %>%
-  filter(
-  !c(verbatimIdentification %in% jp_sp_remove &
-       datasetID == 13))
+# Checks:
+data_filt %>%
+  group_by(datasetID, samplingPeriodID) %>%
+  skimr::skim()
 
 #----------------------------------------------------------#
 # Save data to .rds  -----
 #----------------------------------------------------------#
 
-saveRDS(data_sf6, here::here("Data", "output", "1_data", "1_data_sf.rds"))
-saveRDS(presence_data_filt2, here::here("Data", "output",  "1_data", "1_data_filtered.rds"))
+saveRDS(data_sf2, here::here("Data", "output", "1_data", "1_data_sf.rds"))
+saveRDS(data_filt, here::here("Data", "output",  "1_data", "1_data_filtered.rds"))
+

@@ -40,11 +40,11 @@ source(here::here("R/00_Configuration.R"))
 # source(here::here("R/10_Predictors_geometry.R"))
 
 ## Predictors H2: Spatial autocorrelation (Morans I, Join count) ✅
-source(here::here("R/11_Predictors_spatial_autocorrelation.R"))
+# source(here::here("R/11_Predictors_spatial_autocorrelation.R"))
 
-## Predictors H2: Lacunarity
-# source(here::here("R/12a_Predictors_Lacunarity_rasterize_ranges.R")) ✅
-# source(here::here("R/12b_Predictors_Lacunarity_calculation.R"))
+## Predictors H2: Lacunarity✅
+# source(here::here("R/12a_Predictors_Lacunarity_rasterize_ranges.R"))
+# source(here::here("R/12b_test_lac_terra_focal.R"))
 
 
 ## Merge predictors:

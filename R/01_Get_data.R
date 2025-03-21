@@ -126,7 +126,7 @@ bl_query <-
     "SELECT \"sci_name\", \"presence\", \"origin\", \"seasonal\",\"geometry\" ",
     "FROM \"MOBI_botw_multipolygon_2024\" ",
     "WHERE \"sci_name\" IN (", name_vector_sql, ") ",
-    # Extant, probably extant, possibly extant (not possibly extinct or extinct)
+    # "Extant", "probably extant", "possibly extant" (not "possibly extinct" or "extinct")
     "AND \"presence\" IN (1, 2, 3)"
 )
 
@@ -157,3 +157,5 @@ BirdLife_introduced <- BirdLife %>% filter(origin == 3)
 # save to shp
 st_write(BirdLife_global, here::here("Data/input/shp_global/BirdLife_global.shp"), append = F)
 st_write(BirdLife_introduced, here::here("Data/input/shp_introduced/BirdLife_introduced.shp"), append = F)
+
+gc()
